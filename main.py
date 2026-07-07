@@ -51,6 +51,23 @@ async def stream_watcher(stream, is_err=False, prefix="[bonecast]"):
             (logger.warning if is_err else logger.info)(f"{prefix} {msg}")
 
 
+# Decky enregistre son PROPRE module `updater` dans sys.modules → un simple
+# `import updater` renverrait celui-là (sans is_autoupdate_enabled). On charge
+# notre fichier par chemin sous un nom unique pour éviter la collision. Depuis
+# defaults/ (toujours dans le zip + synchronisé par le deploy).
+import importlib.util as _ilu  # noqa: E402
+_upath = Path(DECKY_PLUGIN_DIR) / "defaults" / "updater.py"
+if not _upath.exists():
+    _upath = Path(DECKY_PLUGIN_DIR) / "updater.py"
+try:
+    _uspec = _ilu.spec_from_file_location("bc_updater", str(_upath))
+    updater = _ilu.module_from_spec(_uspec)
+    _uspec.loader.exec_module(updater)
+except Exception as _e:                       # best-effort : le plugin survit sans updater
+    logger.warning(f"[updater] indisponible : {_e!r}")
+    updater = None
+
+
 class Plugin:
     # ── OAuth Twitch (device code flow, client public — pas de secret) ───────
     _TWITCH_CLIENT_ID = "idbnwqbkqyrzesxct1ztkejyf5aj6z"
@@ -935,8 +952,62 @@ class Plugin:
 
     # ── Cycle de vie ─────────────────────────────────────────────────────────
     @classmethod
+    # ── Auto-update (release-based, comme le reste de la suite) ───────────────
+    @classmethod
+    async def _autoupdate_check(cls):
+        """Vérif silencieuse au boot : si activé et qu'une release plus récente
+        existe, télécharge + décompresse par-dessus le plugin puis recharge."""
+        if updater is None:
+            return
+        try:
+            if not updater.is_autoupdate_enabled():
+                return
+            info = await updater.check()
+            if not info.get("update_available"):
+                return
+            logger.info(f"[updater] {info['latest']} dispo (installé "
+                        f"{info['current']}) — application auto")
+            if await updater.apply(info["url"]):
+                from asyncio import sleep as _sleep
+                logger.info("[updater] mise à jour installée — rechargement")
+                await _sleep(2)
+                updater.restart_loader()
+        except Exception as e:
+            logger.warning(f"[updater] auto-check: {e!r}")
+
+    @classmethod
+    async def check_update(cls):
+        if not updater:
+            return {"update_available": False, "error": "updater indisponible"}
+        return await updater.check()
+
+    @classmethod
+    async def get_version(cls):
+        return updater.get_current_version() if updater else "0.0.0"
+
+    @classmethod
+    async def apply_update(cls, url):
+        if not updater:
+            return False
+        ok = await updater.apply(url)
+        if ok:
+            from asyncio import sleep as _sleep
+            await _sleep(1)
+            updater.restart_loader()
+        return ok
+
+    @classmethod
+    async def get_autoupdate(cls):
+        return updater.is_autoupdate_enabled() if updater else False
+
+    @classmethod
+    async def set_autoupdate(cls, enabled):
+        return updater.set_autoupdate_enabled(enabled) if updater else False
+
+    @classmethod
     async def _main(cls):
         logger.info("BoneCast backend chargé")
+        create_task(cls._autoupdate_check())
 
     @classmethod
     async def _unload(cls):

@@ -419,11 +419,71 @@ function OverlaySection() {
   );
 }
 
+// Auto-update basé sur les releases GitHub (comme le reste de la suite).
+function UpdaterSection() {
+  const [auto, setAuto] = useState(true);
+  const [status, setStatus] = useState<
+    "idle" | "checking" | "available" | "uptodate" | "installing">("idle");
+  const [latest, setLatest] = useState("");
+  const [current, setCurrent] = useState("");
+  const [url, setUrl] = useState("");
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    call<[], boolean>("get_autoupdate").then((v) => setAuto(!!v)).catch(() => {});
+    call<[], string>("get_version").then((v) => setCurrent(v || "")).catch(() => {});
+  }, []);
+
+  const doCheck = async () => {
+    setStatus("checking");
+    try {
+      const info: any = await call<[], any>("check_update");
+      setCurrent(info?.current || "");
+      if (info?.update_available) {
+        setLatest(info.latest); setUrl(info.url); setStatus("available");
+      } else setStatus("uptodate");
+    } catch { setStatus("idle"); }
+  };
+  const doInstall = async () => {
+    setStatus("installing");                    // le backend décompresse + recharge
+    try { await call<[string], boolean>("apply_update", url); } catch {}
+  };
+  const onToggle = (v: boolean) => {
+    setAuto(v); call<[boolean], boolean>("set_autoupdate", v).catch(() => {});
+  };
+
+  const label =
+    status === "checking" ? "Vérification…"
+    : status === "installing" ? "Installation…"
+    : status === "available" ? `Installer la v${latest}`
+    : status === "uptodate" ? `À jour (v${current})`
+    : "Vérifier les mises à jour";
+
+  return (
+    <PanelSection title="🔄 Mises à jour">
+      <PanelSectionRow>
+        <ToggleField label="Mise à jour automatique" checked={auto}
+          description="Installe les nouvelles versions au démarrage"
+          onChange={onToggle} bottomSeparator="none" />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <B style={{ width: "100%", borderRadius: 6, color: "#fff", ...focusHalo(TWITCH, focused) }}
+          onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+          onGamepadFocus={() => setFocused(true)} onGamepadBlur={() => setFocused(false)}
+          onClick={status === "available" ? doInstall : doCheck}>
+          🔄 {label}
+        </B>
+      </PanelSectionRow>
+    </PanelSection>
+  );
+}
+
 function Content() {
   return (
     <>
       <StreamSection />
       <OverlaySection />
+      <UpdaterSection />
     </>
   );
 }
