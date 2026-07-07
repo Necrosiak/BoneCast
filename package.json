@@ -1,0 +1,48 @@
+{
+  "name": "bonecast",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Twitch in Steam Gaming Mode — streaming + transparent chat overlay",
+  "scripts": {
+    "build": "shx rm -rf dist && rollup -c",
+    "build_norm": "rollup -c",
+    "watch": "rollup -c -w",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Necrosiak/BoneCast.git"
+  },
+  "keywords": ["decky", "plugin", "twitch", "streaming", "steam-deck", "deck"],
+  "author": "Necrosiak",
+  "license": "BSD-3-Clause",
+  "bugs": {
+    "url": "https://github.com/Necrosiak/BoneCast/issues"
+  },
+  "homepage": "https://github.com/Necrosiak/BoneCast#readme",
+  "devDependencies": {
+    "@decky/rollup": "^1.0.2",
+    "@rollup/plugin-commonjs": "^21.1.0",
+    "@rollup/plugin-json": "^4.1.0",
+    "@rollup/plugin-node-resolve": "^13.3.0",
+    "@rollup/plugin-replace": "^4.0.0",
+    "@rollup/plugin-typescript": "^8.3.3",
+    "@types/react": "16.14.0",
+    "@types/webpack": "^5.28.0",
+    "rollup": "^2.77.1",
+    "rollup-plugin-import-assets": "^1.1.1",
+    "shx": "^0.3.4",
+    "tslib": "^2.4.0",
+    "typescript": "^4.7.4"
+  },
+  "dependencies": {
+    "@decky/api": "^1.1.3",
+    "@decky/ui": "^4.11.6",
+    "react-icons": "^4.4.0"
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "ignoreMissing": ["react", "react-dom"]
+    }
+  }
+}

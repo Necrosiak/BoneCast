@@ -1,0 +1,305 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --op: 0.42; --fs: 13px; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
+    font-family: "Motiva Sans", "Segoe UI", system-ui, sans-serif; -webkit-user-select: none; }
+
+  /* La boîte de chat — verre sombre translucide, coins arrondis, ancrée où on la pose. */
+  #box {
+    position: absolute; top: 24px; right: 24px; width: 360px; height: 460px;
+    display: flex; flex-direction: column;
+    background: rgba(18, 18, 24, var(--op));
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; box-shadow: 0 6px 28px rgba(0,0,0,0.5);
+    color: #fff; box-sizing: border-box; overflow: hidden;
+  }
+  /* En-tête : titre + pastille live + bouton options. Zone de préhension (drag). */
+  #hdr {
+    display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: move;
+    background: rgba(0,0,0,0.25); font-size: 12px; font-weight: 700; flex-shrink: 0;
+  }
+  #hdr .tw { color: #9146ff; }
+  #chan { opacity: 0.85; font-weight: 600; }
+  #dot { width: 8px; height: 8px; border-radius: 50%; background: #888; margin-left: 2px; }
+  #dot.on { background: #ed4245; box-shadow: 0 0 6px 1px rgba(237,66,69,.8); }
+  #gear { margin-left: auto; cursor: pointer; opacity: 0.7; font-size: 14px; padding: 0 2px; }
+  #gear:hover { opacity: 1; }
+
+  #log { flex: 1; overflow-y: auto; padding: 6px 10px; scrollbar-width: thin; }
+  #log::-webkit-scrollbar { width: 6px; }
+  #log::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+
+  .m { font-size: var(--fs); line-height: 1.4; margin: 2px 0; word-wrap: break-word;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
+  .m .b { height: 1.05em; vertical-align: -0.18em; margin-right: 2px; }
+  .m .u { font-weight: 700; }
+  .m .sep { opacity: 0.6; }
+  .m .e { height: 1.6em; vertical-align: -0.45em; margin: 0 1px; }
+  .sys { font-size: 11px; opacity: 0.55; font-style: italic; margin: 4px 0; }
+
+  /* Poignée de redimensionnement (coin bas-gauche, la boîte étant ancrée à droite). */
+  #grip { position: absolute; left: 0; bottom: 0; width: 16px; height: 16px;
+    cursor: nesw-resize; opacity: 0.35; }
+  #grip::before { content: ""; position: absolute; left: 3px; bottom: 3px;
+    width: 8px; height: 8px; border-left: 2px solid #fff; border-bottom: 2px solid #fff; border-radius: 0 0 0 3px; }
+
+  /* Panneau d'options (⚙). */
+  #opt { position: absolute; top: 34px; right: 8px; width: 210px; padding: 10px;
+    background: rgba(24,24,30,0.96); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,0.6); display: none; z-index: 5; }
+  #opt.show { display: block; }
+  #opt h4 { margin: 0 0 8px; font-size: 12px; }
+  #opt label { display: block; font-size: 11px; opacity: 0.85; margin: 8px 0 2px; }
+  #opt input[type=range] { width: 100%; }
+  #opt .row { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 8px; }
+  #opt .pos { display: flex; gap: 4px; margin-top: 4px; }
+  #opt .pos button, #opt .close {
+    flex: 1; font-size: 11px; padding: 4px 0; color: #fff; cursor: pointer;
+    background: rgba(255,255,255,0.08); border: 1px solid transparent; border-radius: 5px; }
+  #opt .pos button.on { background: #9146ff; }
+  #opt .close { margin-top: 10px; background: rgba(145,70,255,0.35); }
+</style>
+</head>
+<body>
+  <div id="box">
+    <div id="hdr">
+      <span class="tw">💬</span><span id="chan">chat</span><span id="dot"></span>
+      <span id="gear">⚙</span>
+    </div>
+    <div id="log"></div>
+    <div id="grip"></div>
+    <div id="opt">
+      <h4>Options</h4>
+      <label>Opacité <span id="vop"></span></label>
+      <input id="s-op" type="range" min="10" max="95" step="5">
+      <label>Taille du texte <span id="vfs"></span></label>
+      <input id="s-fs" type="range" min="10" max="22" step="1">
+      <label>Largeur <span id="vw"></span></label>
+      <input id="s-w" type="range" min="240" max="640" step="10">
+      <label>Hauteur <span id="vh"></span></label>
+      <input id="s-h" type="range" min="200" max="900" step="20">
+      <div class="row"><input id="c-badges" type="checkbox"><span>Afficher les badges</span></div>
+      <div class="row"><input id="c-emotes" type="checkbox"><span>Emotes BTTV/7TV/FFZ</span></div>
+      <label>Position</label>
+      <div class="pos">
+        <button data-pos="tl">↖</button><button data-pos="tr">↗</button>
+        <button data-pos="bl">↙</button><button data-pos="br">↘</button>
+      </div>
+      <div class="close" id="opt-close">Fermer</div>
+    </div>
+  </div>
+
+<script>
+// ── Config : injectée par le lanceur Python (window.OVERLAY_CFG) ou query string. ──
+const Q = new URLSearchParams(location.search);
+const CFG = Object.assign({
+  channel: Q.get("channel") || "twitch",
+  opacity: 62, fontSize: 13, width: 360, height: 460, pos: "tr",
+  badges: true, thirdParty: true,
+}, (window.OVERLAY_CFG || {}));
+// Réglages persistés localement (survivent aux relances — data dir WebKit persistant).
+try { Object.assign(CFG, JSON.parse(localStorage.getItem("tw_overlay_cfg_" + CFG.channel) || "{}")); } catch (e) {}
+
+const box = document.getElementById("box"), log = document.getElementById("log");
+const dot = document.getElementById("dot"), chanEl = document.getElementById("chan");
+chanEl.textContent = CFG.channel;
+
+function applyCfg() {
+  document.documentElement.style.setProperty("--op", (CFG.opacity/100).toFixed(2));
+  document.documentElement.style.setProperty("--fs", CFG.fontSize + "px");
+  box.style.width = CFG.width + "px"; box.style.height = CFG.height + "px";
+  const P = { tl:["24px","auto","auto","24px"], tr:["24px","24px","auto","auto"],
+              bl:["auto","auto","24px","24px"], br:["auto","24px","24px","auto"] }[CFG.pos] || ["24px","24px","auto","auto"];
+  box.style.top=P[0]; box.style.right=P[1]; box.style.bottom=P[2]; box.style.left=P[3];
+}
+function saveCfg() { try { localStorage.setItem("tw_overlay_cfg_" + CFG.channel, JSON.stringify(CFG)); } catch(e){} }
+applyCfg();
+
+function sys(t) { const d = document.createElement("div"); d.className = "sys"; d.textContent = t; log.appendChild(d); trim(); }
+function trim() { while (log.children.length > 180) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight; }
+
+// ── Emotes : maps name -> url (globales + par chaîne) pour BTTV/7TV/FFZ. ──
+const emoteMap = new Map();
+function addEmote(name, url) { if (name && url && !emoteMap.has(name)) emoteMap.set(name, url); }
+
+async function loadEmotes(roomId) {
+  if (!CFG.thirdParty) return;
+  const j = async (u) => { try { const r = await fetch(u); return r.ok ? await r.json() : null; } catch(e){ return null; } };
+  // 7TV (globales + chaîne)
+  const g7 = await j("https://7tv.io/v3/emote-sets/global");
+  (g7?.emotes||[]).forEach(e => addEmote(e.name, `https://cdn.7tv.app/emote/${e.id}/1x.webp`));
+  if (roomId) { const c7 = await j("https://7tv.io/v3/users/twitch/" + roomId);
+    (c7?.emote_set?.emotes||[]).forEach(e => addEmote(e.name, `https://cdn.7tv.app/emote/${e.id}/1x.webp`)); }
+  // BTTV (globales + chaîne)
+  const gb = await j("https://api.betterttv.net/3/cached/emotes/global");
+  (gb||[]).forEach(e => addEmote(e.code, `https://cdn.betterttv.net/emote/${e.id}/1x`));
+  if (roomId) { const cb = await j("https://api.betterttv.net/3/cached/users/twitch/" + roomId);
+    [...(cb?.channelEmotes||[]), ...(cb?.sharedEmotes||[])].forEach(e => addEmote(e.code, `https://cdn.betterttv.net/emote/${e.id}/1x`)); }
+  // FFZ (globales + chaîne par login)
+  const collectFfz = (o) => Object.values(o?.sets||{}).forEach(s => (s.emoticons||[]).forEach(e => {
+    const u = e.urls && (e.urls["1"]||e.urls["2"]); if (u) addEmote(e.name, (u.startsWith("http")?u:"https:"+u)); }));
+  collectFfz(await j("https://api.frankerfacez.com/v1/set/global"));
+  collectFfz(await j("https://api.frankerfacez.com/v1/room/" + CFG.channel));
+  sys(`emotes chargées : ${emoteMap.size}`);
+}
+
+// ── Badges : images officielles Twitch (endpoint public, sans auth). ──
+const badgeMap = new Map();  // "set/version" -> url
+async function loadBadges(roomId) {
+  const j = async (u) => { try { const r = await fetch(u); return r.ok ? await r.json() : null; } catch(e){ return null; } };
+  const ingest = (d) => { const bs = d?.badge_sets || {}; for (const set in bs)
+    for (const v in bs[set].versions) badgeMap.set(set + "/" + v, bs[set].versions[v].image_url_1x); };
+  ingest(await j("https://badges.twitch.tv/v1/badges/global/display"));
+  if (roomId) ingest(await j("https://badges.twitch.tv/v1/badges/channels/" + roomId + "/display"));
+}
+
+// ── Parsing IRC + rendu d'un message. ──
+function parseTags(raw) {
+  const tags = {};
+  if (raw.startsWith("@")) { const [ts] = raw.slice(1).split(" ", 1);
+    ts.split(";").forEach(kv => { const i = kv.indexOf("="); if (i>0) tags[kv.slice(0,i)] = kv.slice(i+1); }); }
+  return tags;
+}
+function esc(s){ return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+// Applique d'abord les emotes NATIVES (positions dans le tag "emotes"), puis les
+// emotes tierces (par mot), puis échappe le reste.
+function renderText(text, emotesTag) {
+  const chars = Array.from(text); // codepoints (les positions Twitch sont en codepoints)
+  const marks = new Array(chars.length).fill(null);
+  if (emotesTag) emotesTag.split("/").forEach(part => { const [id, ranges] = part.split(":");
+    if (!ranges) return; ranges.split(",").forEach(r => { const [a,b] = r.split("-").map(Number);
+      if (!isNaN(a)&&!isNaN(b)) { marks[a] = { id, end: b }; for (let k=a+1;k<=b;k++) marks[k] = "skip"; } }); });
+  let html = "", i = 0;
+  while (i < chars.length) {
+    const mk = marks[i];
+    if (mk && mk !== "skip") {
+      html += `<img class="e" src="https://static-cdn.jtvnw.net/emoticons/v2/${mk.id}/default/dark/1.0" loading="lazy">`;
+      i = mk.end + 1; continue;
+    }
+    // mot courant (jusqu'à l'espace) — pour matcher les emotes tierces
+    let j = i; while (j < chars.length && chars[j] !== " " && !(marks[j] && marks[j] !== "skip")) j++;
+    const word = chars.slice(i, j).join("");
+    if (CFG.thirdParty && emoteMap.has(word))
+      html += `<img class="e" src="${emoteMap.get(word)}" loading="lazy" title="${esc(word)}">`;
+    else html += esc(word);
+    // espaces
+    let k = j; while (k < chars.length && chars[k] === " ") k++;
+    html += " ".repeat(k - j); i = k;
+  }
+  return html;
+}
+
+function addMessage(tags, user, text) {
+  const el = document.createElement("div"); el.className = "m";
+  let badges = "";
+  if (CFG.badges && tags.badges) tags.badges.split(",").forEach(bv => {
+    const u = badgeMap.get(bv); if (u) badges += `<img class="b" src="${u}" title="${esc(bv)}">`; });
+  const color = tags.color && /^#/.test(tags.color) ? tags.color : "#b9a3ff";
+  const name = tags["display-name"] || user;
+  el.innerHTML = badges + `<span class="u" style="color:${color}">${esc(name)}</span><span class="sep">: </span>`
+    + renderText(text, tags.emotes);
+  log.appendChild(el); trim();
+}
+
+// ── Connexion IRC Twitch (WebSocket, anonyme, lecture seule). ──
+let ws, reconnectT, pingT, roomId = null, loaded = false;
+function connect() {
+  dot.classList.remove("on");
+  ws = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
+  const nick = "justinfan" + Math.floor(10000 + Math.random()*89999);
+  ws.onopen = () => {
+    ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+    ws.send("PASS SCHMOOPIIE"); ws.send("NICK " + nick);
+    ws.send("JOIN #" + CFG.channel.toLowerCase());
+    clearInterval(pingT); pingT = setInterval(() => { try { ws.send("PING"); } catch(e){} }, 60000);
+  };
+  ws.onmessage = (ev) => ev.data.split("\r\n").forEach(handleLine);
+  ws.onclose = () => { dot.classList.remove("on"); clearInterval(pingT);
+    clearTimeout(reconnectT); reconnectT = setTimeout(connect, 3000); };
+  ws.onerror = () => { try { ws.close(); } catch(e){} };
+}
+function handleLine(line) {
+  if (!line) return;
+  if (line.startsWith("PING")) { ws.send("PONG :tmi.twitch.tv"); return; }
+  const tags = parseTags(line);
+  const rest = line.startsWith("@") ? line.slice(line.indexOf(" ")+1) : line;
+  if (rest.includes(" ROOMSTATE ") || rest.includes(" JOIN ")) {
+    dot.classList.add("on");
+    if (!loaded && tags["room-id"]) { loaded = true; roomId = tags["room-id"];
+      loadBadges(roomId); loadEmotes(roomId); }
+  }
+  const m = rest.match(/^:([^!]+)![^ ]+ PRIVMSG #[^ ]+ :([\s\S]*)$/);
+  if (m) addMessage(tags, m[1], m[2].replace(/[]/g, "").replace(/^ACTION |ACTION$/g,""));
+}
+
+// ── Déplacement (drag de l'en-tête) & redimensionnement (poignée). ──
+(function () {
+  const hdr = document.getElementById("hdr"), grip = document.getElementById("grip");
+  let mode = null, sx, sy, sw, sh, sr, st;
+  const start = (m) => (e) => { mode = m; sx = e.clientX; sy = e.clientY;
+    const r = box.getBoundingClientRect(); sw = r.width; sh = r.height;
+    sr = window.innerWidth - r.right; st = r.top;
+    box.style.right = sr + "px"; box.style.left = "auto"; box.style.top = st + "px"; box.style.bottom = "auto";
+    e.preventDefault(); };
+  hdr.addEventListener("mousedown", start("move"));
+  grip.addEventListener("mousedown", start("resize"));
+  window.addEventListener("mousemove", (e) => { if (!mode) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (mode === "move") { box.style.right = Math.max(0, sr - dx) + "px"; box.style.top = Math.max(0, st + dy) + "px"; }
+    else { CFG.width = Math.max(240, Math.round(sw - dx)); CFG.height = Math.max(200, Math.round(sh + dy));
+      box.style.width = CFG.width + "px"; box.style.height = CFG.height + "px"; syncSliders(); } });
+  window.addEventListener("mouseup", () => { if (mode === "resize") saveCfg(); mode = null; });
+})();
+
+// ── Panneau d'options. ──
+const opt = document.getElementById("opt");
+document.getElementById("gear").onclick = () => opt.classList.toggle("show");
+document.getElementById("opt-close").onclick = () => opt.classList.remove("show");
+const $ = (id) => document.getElementById(id);
+function syncSliders() {
+  $("s-op").value = CFG.opacity; $("vop").textContent = CFG.opacity + "%";
+  $("s-fs").value = CFG.fontSize; $("vfs").textContent = CFG.fontSize + "px";
+  $("s-w").value = CFG.width; $("vw").textContent = CFG.width;
+  $("s-h").value = CFG.height; $("vh").textContent = CFG.height;
+  $("c-badges").checked = CFG.badges; $("c-emotes").checked = CFG.thirdParty;
+  document.querySelectorAll("#opt .pos button").forEach(b => b.classList.toggle("on", b.dataset.pos === CFG.pos));
+}
+const bind = (id, key, suf) => $(id).addEventListener("input", (e) => {
+  CFG[key] = Number(e.target.value); applyCfg(); syncSliders(); saveCfg(); });
+bind("s-op", "opacity"); bind("s-fs", "fontSize"); bind("s-w", "width"); bind("s-h", "height");
+$("c-badges").onchange = (e) => { CFG.badges = e.target.checked; saveCfg(); };
+$("c-emotes").onchange = (e) => { CFG.thirdParty = e.target.checked; saveCfg(); if (CFG.thirdParty && roomId) loadEmotes(roomId); };
+document.querySelectorAll("#opt .pos button").forEach(b => b.onclick = () => { CFG.pos = b.dataset.pos; applyCfg(); syncSliders(); saveCfg(); });
+syncSliders();
+
+// ── Mode « piloté » (gamemode) : le plan overlay gamescope est display-only
+// (input passthrough vers le jeu) → les réglages arrivent du QAM Steamcord via
+// un fichier d'état poll-é. En desktop (pas de stateUrl), c'est le panneau ⚙ qui
+// pilote. On applique seulement les clés présentes (opacity/fontSize/width/height/pos/badges/thirdParty). ──
+if (CFG.stateUrl) {
+  let last = "";
+  setInterval(async () => {
+    try {
+      const r = await fetch(CFG.stateUrl, { cache: "no-store" });
+      if (!r.ok) return; const txt = await r.text(); if (txt === last) return; last = txt;
+      const s = JSON.parse(txt); let touchEmotes = false;
+      ["opacity","fontSize","width","height","pos"].forEach(k => { if (s[k] != null) CFG[k] = s[k]; });
+      if (s.badges != null) CFG.badges = s.badges;
+      if (s.thirdParty != null && s.thirdParty !== CFG.thirdParty) { CFG.thirdParty = s.thirdParty; touchEmotes = true; }
+      applyCfg(); syncSliders();
+      if (touchEmotes && CFG.thirdParty && roomId) loadEmotes(roomId);
+    } catch (e) {}
+  }, 1200);
+}
+
+sys("connexion au chat de #" + CFG.channel + " …");
+connect();
+</script>
+</body>
+</html>
