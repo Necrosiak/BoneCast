@@ -1,6 +1,6 @@
 {
   "name": "bonecast",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "Twitch in Steam Gaming Mode — streaming + transparent chat overlay",
   "scripts": {

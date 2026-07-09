@@ -1030,13 +1030,13 @@ class Plugin:
     @classmethod
     async def apply_update(cls, url):
         if not updater:
-            return False
-        ok = await updater.apply(url)
-        if ok:
+            return {"ok": False, "error": "updater unavailable"}
+        res = await updater.apply(url)
+        if res.get("ok"):
             from asyncio import sleep as _sleep
             await _sleep(1)
             updater.restart_loader()
-        return ok
+        return res
 
     @classmethod
     async def get_autoupdate(cls):

@@ -425,7 +425,8 @@ function OverlaySection() {
 function UpdaterSection() {
   const [auto, setAuto] = useState(true);
   const [status, setStatus] = useState<
-    "idle" | "checking" | "available" | "uptodate" | "installing">("idle");
+    "idle" | "checking" | "available" | "uptodate" | "installing" | "failed">("idle");
+  const [updErr, setUpdErr] = useState("");
   const [latest, setLatest] = useState("");
   const [current, setCurrent] = useState("");
   const [url, setUrl] = useState("");
@@ -448,7 +449,11 @@ function UpdaterSection() {
   };
   const doInstall = async () => {
     setStatus("installing");                    // le backend décompresse + recharge
-    try { await call<[string], boolean>("apply_update", url); } catch {}
+    // Échec → {ok:false, error} : on l'affiche au lieu de rester sur « Installation… ».
+    try {
+      const r: any = await call<[string], any>("apply_update", url);
+      if (!(r === true || r?.ok)) { setUpdErr(r?.error || ""); setStatus("failed"); }
+    } catch { setStatus("failed"); }
   };
   const onToggle = (v: boolean) => {
     setAuto(v); call<[boolean], boolean>("set_autoupdate", v).catch(() => {});
@@ -459,6 +464,7 @@ function UpdaterSection() {
     : status === "installing" ? "Installation…"
     : status === "available" ? `Installer la v${latest}`
     : status === "uptodate" ? `À jour (v${current})`
+    : status === "failed" ? "⚠️ Échec de la mise à jour"
     : "Vérifier les mises à jour";
 
   return (
@@ -476,6 +482,11 @@ function UpdaterSection() {
           🔄 {label}
         </B>
       </PanelSectionRow>
+      {status === "failed" && updErr ? (
+        <PanelSectionRow>
+          <div style={{ fontSize: 11, opacity: 0.8, wordBreak: "break-word" }}>{updErr}</div>
+        </PanelSectionRow>
+      ) : null}
     </PanelSection>
   );
 }
