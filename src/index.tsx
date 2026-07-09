@@ -109,7 +109,9 @@ function StreamSection() {
         }
         else setStreamMsg(
           r?.error === "no_key" ? "⚠️ Clé introuvable — reconnecte-toi à Twitch"
-          : r?.error === "no_loopback" ? "⚠️ /dev/video42 absent (v4l2loopback non chargé)"
+          // stand-alone : le backend fournit la commande exacte pour CET OS
+          : r?.error === "no_loopback" ? "⚠️ " + (r?.hint || "/dev/video42 absent (v4l2loopback non chargé)")
+          : r?.error === "no_ffmpeg" ? "⚠️ ffmpeg manquant — " + (r?.hint || "installe ffmpeg")
           : "⚠️ " + (r?.error || "échec du live"));
       }
     } finally { setStreamBusy(false); }

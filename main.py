@@ -729,10 +729,50 @@ class Plugin:
             except Exception:
                 pass
 
+    # ── stand-alone : une seule version pour tous les OS ────────────────────────
+    # Le plugin vérifie ce que la machine a et dit exactement quoi installer.
+    @staticmethod
+    def _pkg_hint(arch, fedora, debian):
+        import shutil as _sh
+        if _sh.which("pacman"):
+            return f"sudo pacman -S {arch}"
+        if _sh.which("rpm-ostree"):
+            return f"rpm-ostree install {fedora}"
+        if _sh.which("dnf"):
+            return f"sudo dnf install {fedora}"
+        if _sh.which("apt"):
+            return f"sudo apt install {debian}"
+        return f"install: {arch}"
+
+    @classmethod
+    async def _v4l2_hint(cls):
+        """Distingue « module pas installé » (installer le paquet) de « installé
+        mais pas chargé » (modprobe/reboot) pour donner LA bonne commande."""
+        from asyncio import create_subprocess_exec
+        from subprocess import DEVNULL
+        try:
+            p = await create_subprocess_exec("modinfo", "v4l2loopback",
+                                             stdout=DEVNULL, stderr=DEVNULL)
+            installed = (await p.wait()) == 0
+        except Exception:
+            installed = False
+        if installed:
+            return ("v4l2loopback installé mais pas chargé : sudo modprobe v4l2loopback "
+                    "video_nr=42 card_label=BoneCast exclusive_caps=1 (puis réessaie)")
+        pkg = cls._pkg_hint("v4l2loopback-dkms", "v4l2loopback", "v4l2loopback-dkms")
+        return (f"module v4l2loopback manquant : {pkg} puis sudo modprobe "
+                "v4l2loopback video_nr=42 card_label=BoneCast exclusive_caps=1")
+
     @classmethod
     async def start_stream(cls):
         from asyncio import create_subprocess_exec, sleep
         from subprocess import PIPE
+        import shutil as _sh
+        # stand-alone : ffmpeg est requis (encodage + push RTMP) — présent sur
+        # Bazzite, pas garanti ailleurs.
+        if not _sh.which("ffmpeg"):
+            return {"ok": False, "error": "no_ffmpeg",
+                    "hint": cls._pkg_hint("ffmpeg", "ffmpeg", "ffmpeg")}
         cfg = cls._load_cfg()
         # Connecté en OAuth → rafraîchit la clé (elle peut tourner) avant de passer live.
         if (cfg.get("oauth") or {}).get("access_token"):
@@ -747,12 +787,14 @@ class Plugin:
         if cls._stream_proc is not None and cls._stream_proc.returncode is None:
             return {"ok": True, "already": True}
         if not os.path.exists("/dev/video42"):
-            return {"ok": False, "error": "no_loopback"}
+            return {"ok": False, "error": "no_loopback",
+                    "hint": await cls._v4l2_hint()}
         # S'assurer que la capture jeu alimente /dev/video42.
         if not (cls._camera_feeder is not None
                 and cls._camera_feeder.returncode is None):
             if not await cls._start_camera_feeder():
-                return {"ok": False, "error": "no_loopback"}
+                return {"ok": False, "error": "no_loopback",
+                        "hint": await cls._v4l2_hint()}
             await sleep(1)
         ingest = cfg.get("ingest") or cls._TWITCH_INGEST
         st = {**cls._STREAM_DEFAULTS, **(cfg.get("stream") or {})}
