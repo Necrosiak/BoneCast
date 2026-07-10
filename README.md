@@ -38,6 +38,12 @@ Everything is driven from the QAM and survives reboots.
 
 ---
 
+## 📸 Screenshots
+
+<p align="center">
+  <img src="docs/img/bonecast-golive.jpg" width="60%" alt="Go live panel"/>
+</p>
+
 ## Install
 
 1. Install [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader).
