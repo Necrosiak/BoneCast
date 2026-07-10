@@ -38,6 +38,14 @@ def _ssl_context():
     return _SSL_CTX
 
 
+def sys_python():
+    """Python SYSTÈME (pour les bindings gi/Gst de gst_camera.py).
+    /usr/bin/python n'existe pas sur Debian/Ubuntu (sauf python-is-python3) →
+    résoudre python3 du PATH d'abord."""
+    import shutil as _sh
+    return _sh.which("python3") or _sh.which("python") or "/usr/bin/python"
+
+
 async def stream_watcher(stream, is_err=False, prefix="[bonecast]"):
     """Recopie stdout/stderr d'un sous-process dans le journal Decky."""
     if stream is None:
@@ -88,6 +96,8 @@ class Plugin:
                         "encoder": "auto", "mic": False, "discord_audio": False}
     _vaapi_ok = None                           # cache détection VAAPI (AMD/Intel)
     _nvenc_ok = None                           # cache détection NVENC (Nvidia)
+    _x264_ok = None                            # cache détection libx264 (ffmpeg-free Fedora = absent)
+    _gst_py_ok = False                         # cache : bindings gi/Gst du python système OK
     # ── Mute micro à la volée (n'affecte QUE le stream, pas le vocal Discord) ──
     _mic_active = False                        # micro inclus dans le stream courant ?
     _mic_so_idx = None                         # source-output ffmpeg qui capte le micro
@@ -543,18 +553,69 @@ class Plugin:
         return ok
 
     @classmethod
+    async def _x264_available(cls):
+        """True si le ffmpeg présent embarque libx264 (l'encodeur logiciel du
+        fallback). Le `ffmpeg` par défaut de Fedora (ffmpeg-free) ne l'a PAS —
+        il faut le ffmpeg complet de RPM Fusion. Testé une fois puis en cache."""
+        if cls._x264_ok is not None:
+            return cls._x264_ok
+        from asyncio import create_subprocess_exec, wait_for
+        from subprocess import DEVNULL
+        ok = False
+        try:
+            p = await create_subprocess_exec(
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc=size=64x64:rate=10",
+                "-c:v", "libx264", "-t", "0.2", "-f", "null", "-",
+                stdout=DEVNULL, stderr=DEVNULL, env=bcenv.user_env())
+            ok = (await wait_for(p.wait(), timeout=12)) == 0
+        except Exception:
+            ok = False
+        cls._x264_ok = ok
+        logger.info(f"[stream] encode logiciel libx264 = {'dispo' if ok else 'ABSENT (ffmpeg-free ?)'}")
+        return ok
+
+    @classmethod
+    async def _gst_python_hint(cls):
+        """None si le python système a gi + Gst + pipewiresrc (requis par
+        gst_camera.py), sinon le hint d'install pour cet OS. Présents sur
+        Bazzite/SteamOS, pas sur Arch/Fedora/Debian de base."""
+        if cls._gst_py_ok:
+            return None
+        from asyncio import create_subprocess_exec
+        from subprocess import DEVNULL
+        try:
+            p = await create_subprocess_exec(
+                sys_python(), "-c",
+                "import gi; gi.require_version('Gst','1.0'); "
+                "from gi.repository import Gst; Gst.init(None); "
+                "raise SystemExit(0 if Gst.ElementFactory.find('pipewiresrc') else 1)",
+                stdout=DEVNULL, stderr=DEVNULL, env=bcenv.user_env())
+            if (await p.wait()) == 0:
+                cls._gst_py_ok = True
+                return None
+        except Exception:
+            pass
+        return ("bindings GStreamer/PipeWire manquants pour la capture : "
+                + cls._pkg_hint("python-gobject gst-plugin-pipewire",
+                                "python3-gobject pipewire-gstreamer",
+                                "python3-gi gir1.2-gstreamer-1.0 gstreamer1.0-pipewire"))
+
+    @classmethod
     async def get_encoders(cls):
         """Liste des encodeurs utilisables + recommandation (pour le QAM).
         Ordre de préférence matériel : NVENC (Nvidia) > VAAPI (AMD/Intel) > x264."""
         nv = await cls._nvenc_available()
         va = await cls._vaapi_available()
+        x2 = await cls._x264_available()
         avail = ["software"]
         if nv:
             avail.append("nvenc")
         if va:
             avail.append("vaapi")
         rec = "nvenc" if nv else ("vaapi" if va else "software")
-        return {"available": avail, "nvenc": nv, "vaapi": va, "recommended": rec}
+        return {"available": avail, "nvenc": nv, "vaapi": va, "x264": x2,
+                "recommended": rec}
 
     @classmethod
     async def set_stream_settings(cls, settings=None):
@@ -702,7 +763,7 @@ class Plugin:
         if not script.exists():
             script = Path(DECKY_PLUGIN_DIR) / "defaults" / "gst_camera.py"
         cls._camera_feeder = await create_subprocess_exec(
-            "/usr/bin/python", str(script),
+            sys_python(), str(script),
             env=cls._gst_environment(), stdout=PIPE, stderr=PIPE)
         create_task(stream_watcher(cls._camera_feeder.stdout, prefix="[gstcam]"))
         create_task(stream_watcher(cls._camera_feeder.stderr, True, prefix="[gstcam]"))
@@ -740,6 +801,8 @@ class Plugin:
             return f"rpm-ostree install {fedora}"
         if _sh.which("dnf"):
             return f"sudo dnf install {fedora}"
+        if _sh.which("zypper"):
+            return f"sudo zypper install {fedora}"
         if _sh.which("apt"):
             return f"sudo apt install {debian}"
         return f"install: {arch}"
@@ -789,6 +852,9 @@ class Plugin:
         if not os.path.exists("/dev/video42"):
             return {"ok": False, "error": "no_loopback",
                     "hint": await cls._v4l2_hint()}
+        gst_hint = await cls._gst_python_hint()
+        if gst_hint:
+            return {"ok": False, "error": "no_gst", "hint": gst_hint}
         # S'assurer que la capture jeu alimente /dev/video42.
         if not (cls._camera_feeder is not None
                 and cls._camera_feeder.returncode is None):
@@ -828,6 +894,13 @@ class Plugin:
             enc = "software"
         elif enc == "vaapi" and not await cls._vaapi_available():
             enc = "software"
+        # fallback logiciel : vérifier que le ffmpeg présent a bien libx264
+        # (le ffmpeg-free de Fedora ne l'a pas → erreur claire, pas un crash).
+        if enc == "software" and not await cls._x264_available():
+            return {"ok": False, "error": "no_x264",
+                    "hint": "ce ffmpeg n'a pas libx264 (ffmpeg-free de Fedora ?) — "
+                            "installe le ffmpeg complet (Fedora : active RPM Fusion puis "
+                            "sudo dnf swap ffmpeg-free ffmpeg --allowerasing)"}
         # Entrées : vidéo (loopback jeu) + son du jeu (idx 1) + micro + Discord.
         # thread_queue_size + genpts = tampons plus larges + PTS régénérés →
         # évite les « backward in time »/underruns qui font tomber le RTMP.

@@ -112,7 +112,9 @@ function StreamSection() {
           // stand-alone : le backend fournit la commande exacte pour CET OS
           : r?.error === "no_loopback" ? "⚠️ " + (r?.hint || "/dev/video42 absent (v4l2loopback non chargé)")
           : r?.error === "no_ffmpeg" ? "⚠️ ffmpeg manquant — " + (r?.hint || "installe ffmpeg")
-          : "⚠️ " + (r?.error || "échec du live"));
+          : r?.error === "no_x264" ? "⚠️ " + (r?.hint || "ffmpeg sans libx264")
+          : r?.error === "no_gst" ? "⚠️ " + (r?.hint || "bindings GStreamer/PipeWire manquants")
+          : "⚠️ " + (r?.hint || r?.error || "échec du live"));
       }
     } finally { setStreamBusy(false); }
   };
