@@ -48,6 +48,27 @@ BoneCast **auto-updates** itself from GitHub Releases (toggleable in the plugin'
 
 ---
 
+## 🐧 Compatibility
+
+BoneCast targets **every Linux distro** that can run Steam in Gaming Mode /
+Big Picture: one build, runtime detection of everything external (ffmpeg,
+libx264, v4l2loopback, GStreamer), and the exact install command for your
+package manager shown in the QAM when something is missing.
+Per-distro package notes: [docs/OS-NOTES.md](docs/OS-NOTES.md).
+
+## 🐛 Issues & ideas — don't hesitate!
+
+Found a bug, something misbehaving on your distro, or missing a feature?
+**Please open an [issue](https://github.com/Necrosiak/BoneCast/issues)** —
+every report directly shapes what gets built next. Include if you can:
+
+- your distro & version (Bazzite 42, CachyOS, Ubuntu 24.04…) and your GPU (for the encoder probes)
+- the plugin version and what you were doing (going live, overlay, OAuth…)
+- what you expected vs what happened
+- logs: `~/homebrew/logs/BoneCast/`
+
+Feature requests and "it works!" reports on unusual setups are just as valuable.
+
 ## Credits
 
 Created and maintained by **Necrosiak**. Part of the Necrosiak plugin suite for Steam Gaming Mode.
