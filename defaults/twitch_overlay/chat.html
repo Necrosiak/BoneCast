@@ -287,7 +287,10 @@ if (CFG.stateUrl) {
   setInterval(async () => {
     try {
       const r = await fetch(CFG.stateUrl, { cache: "no-store" });
-      if (!r.ok) return; const txt = await r.text(); if (txt === last) return; last = txt;
+      // file:// répond status 0 (donc r.ok=false) dans WebKitGTK alors que le
+      // contenu est bien là → ne rejeter que les vrais échecs HTTP.
+      if (!r.ok && r.status !== 0) return;
+      const txt = await r.text(); if (!txt || txt === last) return; last = txt;
       const s = JSON.parse(txt); let touchEmotes = false;
       ["opacity","fontSize","width","height","pos"].forEach(k => { if (s[k] != null) CFG[k] = s[k]; });
       if (s.badges != null) CFG.badges = s.badges;

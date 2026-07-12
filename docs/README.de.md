@@ -7,47 +7,82 @@
 > Teil der Necrosiak-Plugin-Suite, neben
 > [SkullKey](https://github.com/Necrosiak/SkullKey),
 > [Steamcord](https://github.com/Necrosiak/Steamcord) und BC250-Toolkit.
-> Die Plugin-Oberfläche ist in 9 Sprachen übersetzt und folgt automatisch deiner SteamOS-Sprache.
+> Die Plugin-Oberfläche ist in 9 Sprachen übersetzt und folgt automatisch der SteamOS-Sprache.
 
 ---
 
 ## Was es kann
 
-BoneCast bringt alles, was du zum Streamen auf **Twitch** brauchst, direkt ins Steam-**Schnellzugriffsmenü** — ohne Desktop, ohne Tastatur, vom Login bis zum Livegang komplett gamepad-tauglich.
+BoneCast bringt alles, was du zum Streamen auf **Twitch** brauchst, direkt ins **Quick Access Menu** von Steam — kein Desktop, keine Tastatur, komplett gamepad-tauglich vom Login bis zum Livegang.
 
-- **Ein einziger Twitch-Login** *(Gerätecode — gamepad-freundlich)*: Du gibst einen kurzen Code auf `twitch.tv/activate` ein, und BoneCast holt deinen **Stream-Schlüssel automatisch**. Nie wieder Kopieren und Einfügen.
-- **Livegang aus dem QAM** — eine Taste startet und stoppt den RTMP-Stream. Ein **● LIVE**-Abzeichen erscheint während der Übertragung.
-- **Bearbeitbarer Stream-Titel** — im Plugin festgelegt, **auch live** änderbar.
-- **Automatische Spielkategorie** — aus dem laufenden Steam-Spiel gelesen (auch für Nicht-Steam-Verknüpfungen) und im Handumdrehen aktualisiert. Fällt auf *Just Chatting* zurück, wenn ein Spiel keine passende Twitch-Kategorie hat.
-- **Transparentes Chat-Overlay** — schreibgeschützter Twitch-Chat **über dem Spiel** im Spielmodus (gamescope External-Overlay-Ebene), mit nativen + **BTTV / 7TV / FFZ**-Emotes. Verschiebbar und gestaltbar.
-- **Mikrofon live stummschalten** — schalte dein Mikrofon **im Stream** mit einem Tipp stumm, ohne die Übertragung zu stoppen (und ohne deinen Discord-Anruf stummzuschalten).
-- **Stream-Einstellungen pro Konto** — Auflösung, FPS, Video-/Audio-Bitrate, Keyframe-Intervall und ein **automatisch erkannter Encoder** (NVENC ▸ VAAPI ▸ Software-x264). Angeboten werden nur Encoder, die auf deiner Hardware wirklich funktionieren.
-- **Discord-Audiobrücke** *(wenn [Steamcord](https://github.com/Necrosiak/Steamcord) installiert ist)*: ein optionaler Schalter mischt deine **Discord-Stimme** in den Stream, sodass deine Gruppe von den Zuschauern gehört wird — während du sie weiterhin normal hörst.
+- **Ein einziger Twitch-Login** *(Gerätecode — gamepad-freundlich)*: Du gibst einen kurzen Code auf `twitch.tv/activate` ein, und BoneCast holt deinen **Stream-Key automatisch**. Nie wieder manuelles Kopieren.
+- **Live gehen direkt aus dem QAM** — ein Button startet und stoppt den RTMP-Stream. Ein **● LIVE**-Badge zeigt an, dass du sendest.
+- **Bearbeitbarer Stream-Titel** — im Plugin gesetzt, änderbar **sogar während des Livestreams**.
+- **Automatische Spielkategorie** — vom laufenden Steam-Spiel gelesen (funktioniert auch für Non-Steam-Verknüpfungen) und laufend aktualisiert. Fallback auf *Just Chatting*, wenn ein Spiel keine passende Twitch-Kategorie hat.
+- **Transparentes Chat-Overlay** — der Twitch-Chat (nur lesend) wird im Spielmodus **über dem Spiel** gezeichnet (gamescope-External-Overlay-Ebene), mit nativen + **BTTV / 7TV / FFZ**-Emotes. Position, Größe und Deckkraft lassen sich live aus dem QAM einstellen, und es bleibt sogar sichtbar, wenn Big Picture den Fokus hat.
+- **🎬 Sofort-Clips** — im Livestream clippt ein Button die letzten ~30 Sekunden über die Twitch-API; der Clip landet etwa 15 Sekunden später auf deinem Dashboard.
+- **💬 Schreib in deinem eigenen Chat** — sende Nachrichten in deinen Twitch-Chat direkt aus dem QAM, ohne Tastatur-über-Desktop-Verrenkungen.
+- **⏸️ BRB-Modus** — ein Tastendruck ersetzt das Spielbild durch einen sauberen Pausenbildschirm und schaltet dein Mikro stumm; ein weiterer bringt dich zurück. Der Stream bricht nie ab.
+- **⏺️ Lokale Aufnahme** — speichere deine Session als MKV in `~/Videos/BoneCast/`, parallel zum Livestream oder **ganz ohne zu streamen** (kein Stream-Key im Spiel).
+- **Live-Mikro-Stummschaltung** — schalte dein Mikrofon **im Stream** mit einem Tastendruck stumm, ohne die Übertragung zu stoppen (und ohne deinen Discord-Call stummzuschalten).
+- **Stream-Einstellungen pro Konto** — Auflösung, fps, Video-/Audio-Bitrate, Keyframe-Intervall und ein **automatisch erkannter Encoder** (NVENC ▸ VAAPI ▸ Software-x264). Es werden nur Encoder angeboten, die auf deiner Hardware wirklich funktionieren.
+- **Discord-Audio-Brücke** *(wenn [Steamcord](https://github.com/Necrosiak/Steamcord) installiert ist)*: Ein optionaler Schalter mischt deine **Discord-Stimme** in den Stream, sodass deine Gruppe von den Zuschauern gehört wird — während du sie weiterhin normal hörst.
 
 ---
 
 ## Wie es funktioniert
 
-Twitch hat keine Video-Push-API, daher bedeutet ein Livegang immer einen **RTMP-Push** im Hintergrund. BoneCast erledigt das für dich:
+Twitch hat keine Video-Push-API, Livegehen bedeutet also immer einen **RTMP-Push** unter der Haube. BoneCast übernimmt das für dich:
 
-1. Der **OAuth-Gerätecode-Flow** meldet dich bei Twitch an und holt deinen Stream-Schlüssel, Titel und Kategorie über die Helix-API — du berührst den Schlüssel nie.
-2. Das Spielbild wird von **gamescope** in ein `v4l2`-Loopback-Gerät aufgenommen, und **ffmpeg** kodiert es (Hardware wenn verfügbar, sonst Software-`libx264`) und pusht es zu `rtmp://…/<dein-Schlüssel>`.
-3. Das **Chat-Overlay** ist eine transparente WebKit-Fläche auf der gamescope External-Overlay-Ebene, die den Twitch-IRC anonym liest und Emotes darstellt.
+1. Der **OAuth-Device-Flow** meldet dich bei Twitch an und holt Stream-Key, Titel und Kategorie über die Helix-API — du fasst den Key nie an.
+2. Das Spielbild wird aus **gamescope** in ein `v4l2`-Loopback-Gerät aufgenommen, und **ffmpeg** kodiert es (Hardware wenn verfügbar, sonst Software-`libx264`) und schiebt es zu `rtmp://…/<dein-key>`.
+3. Das **Chat-Overlay** ist eine transparente WebKit-Oberfläche auf der gamescope-External-Overlay-Ebene, die Twitch-IRC anonym liest und Emotes rendert.
 
-Alles wird aus dem QAM gesteuert und übersteht Neustarts.
+Alles wird aus dem QAM gesteuert und überlebt Neustarts.
 
 ---
+
+## 📸 Screenshots
+
+<p align="center">
+  <img src="img/bonecast-golive.jpg" width="60%" alt="Go-live-Panel"/>
+</p>
 
 ## Installation
 
 1. Installiere [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader).
-2. Hol dir die neueste `BoneCast.zip` von der [Releases](https://github.com/Necrosiak/BoneCast/releases)-Seite oder installiere sie aus dem Decky-Store, sobald verfügbar.
-3. Öffne das **Schnellzugriffsmenü → BoneCast**, melde dich bei Twitch an und geh live.
+2. Aktiviere den **Entwicklermodus** in Deckys allgemeinen Einstellungen, dann Decky-Einstellungen → **Entwickler** → *Plugin von URL installieren*:
+   `https://github.com/Necrosiak/BoneCast/releases/latest/download/BoneCast.zip`
+   (oder hol dir `BoneCast.zip` von der [Releases](https://github.com/Necrosiak/BoneCast/releases)-Seite und installiere aus dem ZIP).
+3. Öffne das **Quick Access Menu → BoneCast**, melde dich bei Twitch an und geh live.
 
-BoneCast **aktualisiert sich automatisch** über GitHub-Releases (im Abschnitt *Aktualisierungen* des Plugins umschaltbar).
+BoneCast **aktualisiert sich automatisch** über GitHub Releases (abschaltbar im Bereich *Updates* des Plugins).
 
 ---
 
-## Danksagung
+## 🐧 Kompatibilität
+
+BoneCast zielt auf **jede Linux-Distribution**, die Steam im Spielmodus /
+Big Picture ausführen kann: ein Build, Laufzeiterkennung von allem Externen
+(ffmpeg, libx264, v4l2loopback, GStreamer), und der exakte Installationsbefehl
+für deinen Paketmanager wird im QAM angezeigt, wenn etwas fehlt.
+Paket-Hinweise pro Distribution: [OS-NOTES.md](OS-NOTES.md).
+
+## 🐛 Bugs & Ideen — nur her damit!
+
+Einen Bug gefunden, etwas verhält sich auf deiner Distribution seltsam, oder
+ein Feature fehlt? **Bitte eröffne ein
+[Issue](https://github.com/Necrosiak/BoneCast/issues)** — jeder Bericht formt
+direkt, was als Nächstes gebaut wird. Wenn möglich, gib an:
+
+- deine Distribution & Version (Bazzite 42, CachyOS, Ubuntu 24.04…) und deine GPU (für die Encoder-Erkennung)
+- die Plugin-Version und was du gerade gemacht hast (Livegang, Overlay, OAuth…)
+- was du erwartet hast vs. was passiert ist
+- Logs: `~/homebrew/logs/BoneCast/`
+
+Feature-Wünsche und „es funktioniert!“-Berichte auf ungewöhnlichen Setups sind
+genauso wertvoll.
+
+## Credits
 
 Erstellt und gepflegt von **Necrosiak**. Teil der Necrosiak-Plugin-Suite für den Steam-Spielmodus.

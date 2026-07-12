@@ -46,3 +46,27 @@ def user_env():
         env.pop("LD_LIBRARY_PATH", None)
     env.pop("LD_PRELOAD", None)
     return env
+
+
+def steam_display_env():
+    """DISPLAY/XAUTHORITY/WAYLAND_DISPLAY de la VRAIE session graphique, lus dans
+    l'environ du process Steam (~/.steampid). L'env de plugin_loader n'a pas
+    XAUTHORITY → le serveur X refuse la connexion (« Authorization required »)
+    et tout process GTK (overlay chat) meurt avant d'afficher quoi que ce soit.
+    Fallback : cookie xauth_* de /run/user/<uid> (KDE le pose là)."""
+    out = {}
+    try:
+        pid = open(os.path.expanduser("~/.steampid")).read().strip()
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            for item in f.read().split(b"\0"):
+                k, _, v = item.partition(b"=")
+                if k in (b"DISPLAY", b"XAUTHORITY", b"WAYLAND_DISPLAY"):
+                    out[k.decode()] = v.decode(errors="ignore")
+    except Exception:
+        pass
+    if "XAUTHORITY" not in out:
+        import glob
+        cookies = sorted(glob.glob(f"/run/user/{os.getuid()}/xauth_*"))
+        if cookies:
+            out["XAUTHORITY"] = cookies[-1]
+    return out

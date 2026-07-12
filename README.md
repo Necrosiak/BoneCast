@@ -19,7 +19,11 @@ BoneCast puts everything you need to stream to **Twitch** right in the Steam **Q
 - **Go live from the QAM** — one button starts and stops the RTMP stream. A **● LIVE** badge shows while you're broadcasting.
 - **Editable stream title** — set it from the plugin, changeable **even while live**.
 - **Automatic game category** — read from the running Steam game (works for non-Steam shortcuts too) and updated on the fly. Falls back to *Just Chatting* when a game has no matching Twitch category.
-- **Transparent chat overlay** — read-only Twitch chat drawn **over the game** in Gaming Mode (gamescope external-overlay plane), with native + **BTTV / 7TV / FFZ** emotes. Movable and styleable.
+- **Transparent chat overlay** — read-only Twitch chat drawn **over the game** in Gaming Mode (gamescope external-overlay plane), with native + **BTTV / 7TV / FFZ** emotes. Position, size and opacity are adjusted live from the QAM, and it stays visible even with Big Picture focused.
+- **🎬 Instant clips** — while live, one button clips the last ~30 seconds through the Twitch API; the clip lands on your dashboard about 15 seconds later.
+- **💬 Talk in your own chat** — send messages to your Twitch chat straight from the QAM, no keyboard-over-desktop gymnastics.
+- **⏸️ BRB mode** — one tap swaps the game feed for a clean pause screen and mutes your mic; one tap brings you back. The stream never drops.
+- **⏺️ Local recording** — save your session as an MKV in `~/Videos/BoneCast/`, either alongside the live stream or **without streaming at all** (no stream key involved).
 - **Live mic mute** — cut your microphone **on the stream** with one tap, without stopping the broadcast (and without muting your Discord call).
 - **Stream settings per account** — resolution, fps, video/audio bitrate, keyframe interval, and an **auto-detected encoder** (NVENC ▸ VAAPI ▸ software x264). Only encoders that actually work on your hardware are offered.
 - **Discord audio bridge** *(when [Steamcord](https://github.com/Necrosiak/Steamcord) is installed)*: an optional toggle mixes your **Discord voice** into the stream, so your party is heard by viewers — while you still hear them normally.

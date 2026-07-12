@@ -79,7 +79,11 @@ except Exception as _e:                       # best-effort : le plugin survit s
 class Plugin:
     # ── OAuth Twitch (device code flow, client public — pas de secret) ───────
     _TWITCH_CLIENT_ID = "idbnwqbkqyrzesxct1ztkejyf5aj6z"
-    _TWITCH_SCOPES = "channel:read:stream_key channel:manage:broadcast"
+    # clips:edit = bouton « Clip » ; user:write:chat = envoi de messages chat.
+    # Les logins existants n'ont PAS ces scopes → les endpoints renvoient 401 et
+    # le front invite à se reconnecter (device flow re-demande tout).
+    _TWITCH_SCOPES = ("channel:read:stream_key channel:manage:broadcast "
+                      "clips:edit user:write:chat")
     _TWITCH_JUST_CHATTING = "509658"          # game_id « Just Chatting »
     _tw_device = None                          # état transitoire du device flow
     _overlay_proc = None
@@ -93,7 +97,8 @@ class Plugin:
                     "1080p": (1920, 1080), "source": (0, 0)}
     _STREAM_DEFAULTS = {"resolution": "720p", "fps": 30, "bitrate": 4500,
                         "audio_bitrate": 160, "keyframe": 2,
-                        "encoder": "auto", "mic": False, "discord_audio": False}
+                        "encoder": "auto", "mic": False, "discord_audio": False,
+                        "record": False}
     _vaapi_ok = None                           # cache détection VAAPI (AMD/Intel)
     _nvenc_ok = None                           # cache détection NVENC (Nvidia)
     _x264_ok = None                            # cache détection libx264 (ffmpeg-free Fedora = absent)
@@ -102,6 +107,11 @@ class Plugin:
     _mic_active = False                        # micro inclus dans le stream courant ?
     _mic_so_idx = None                         # source-output ffmpeg qui capte le micro
     _mic_muted = False                         # micro coupé sur le stream (live)
+    # ── BRB (pause à l'antenne) + enregistrement local ────────────────────────
+    _brb_proc = None                           # writer ffmpeg lavfi → /dev/video42
+    _brb_restore_mic = False                   # micro auto-muté par le BRB → à rétablir
+    _record_path = None                        # fichier mkv du live/enregistrement courant
+    _record_only = False                       # session sans RTMP (enregistrement seul)
     # ── Pont audio Discord (activable si Steamcord présent) ───────────────────
     _DISCORD_SINK = "bonecast_discord"         # sink dédié à la voix Discord
     _ba_modules = []                           # modules pactl chargés (null-sink+loopback)
@@ -374,6 +384,57 @@ class Plugin:
         with open(os.path.join(d, "overlay_state.json"), "w") as f:
             dump(st, f)
 
+    @staticmethod
+    def _scope_error(st, body):
+        """401/403 Helix = token sans le scope (login antérieur à l'ajout) →
+        le front invite à se reconnecter (le device flow re-demande tout)."""
+        if st in (401, 403):
+            return {"ok": False, "error": "missing_scope",
+                    "detail": (body or {}).get("message", "")}
+        return None
+
+    @classmethod
+    async def create_clip(cls):
+        """Clip des ~30 dernières secondes du live (POST /helix/clips)."""
+        bid = cls._broadcaster_id()
+        if not bid:
+            return {"ok": False, "error": "not_logged_in"}
+        st, body = await cls._api("POST", "clips", params={"broadcaster_id": bid})
+        if err := cls._scope_error(st, body):
+            return err
+        data = (body or {}).get("data") or []
+        if st == 202 and data and data[0].get("id"):
+            logger.info(f"[clip] créé: {data[0]['id']}")
+            return {"ok": True, "id": data[0]["id"],
+                    "edit_url": data[0].get("edit_url", "")}
+        # 404 = pas en live (Twitch ne peut clipper qu'un stream actif)
+        if st == 404:
+            return {"ok": False, "error": "not_live"}
+        return {"ok": False, "error": (body or {}).get("message") or f"http {st}"}
+
+    @classmethod
+    async def send_chat(cls, message: str = ""):
+        """Envoie un message dans SON chat (POST /helix/chat/messages)."""
+        message = (message or "").strip()
+        if not message:
+            return {"ok": False, "error": "empty"}
+        bid = cls._broadcaster_id()
+        if not bid:
+            return {"ok": False, "error": "not_logged_in"}
+        st, body = await cls._api(
+            "POST", "chat/messages",
+            json_body={"broadcaster_id": bid, "sender_id": bid,
+                       "message": message[:500]})
+        if err := cls._scope_error(st, body):
+            return err
+        data = (body or {}).get("data") or []
+        if st == 200 and data and data[0].get("is_sent"):
+            return {"ok": True}
+        drop = (data[0].get("drop_reason") or {}) if data else {}
+        return {"ok": False,
+                "error": drop.get("message") or (body or {}).get("message")
+                or f"http {st}"}
+
     @classmethod
     async def set_channel(cls, channel: str = ""):
         try:
@@ -416,9 +477,17 @@ class Plugin:
         d = cls._overlay_state_dir()
         cls._write_overlay_state(cfg)
         try:
-            env = dict(os.environ)
+            # Base = user_env() DIRECTEMENT (pas de .update() sur os.environ :
+            # update ne peut pas RETIRER le LD_LIBRARY_PATH PyInstaller, et ce
+            # /tmp/_MEI* casse libcurl/gio dans WebKit).
             try:
-                env.update(bcenv.user_env())
+                env = dict(bcenv.user_env())
+            except Exception:
+                env = dict(os.environ)
+            try:
+                # DISPLAY/XAUTHORITY de la vraie session (env plugin_loader = pas
+                # de cookie X → « Authorization required » et GTK meurt).
+                env.update(bcenv.steam_display_env())
             except Exception:
                 pass
             env.setdefault("DISPLAY", ":0")     # XWayland gamescope (over-game) ou KWin
@@ -827,7 +896,7 @@ class Plugin:
                 "v4l2loopback video_nr=42 card_label=BoneCast exclusive_caps=1")
 
     @classmethod
-    async def start_stream(cls):
+    async def start_stream(cls, record_only=False):
         from asyncio import create_subprocess_exec, sleep
         from subprocess import PIPE
         import shutil as _sh
@@ -837,16 +906,18 @@ class Plugin:
             return {"ok": False, "error": "no_ffmpeg",
                     "hint": cls._pkg_hint("ffmpeg", "ffmpeg", "ffmpeg")}
         cfg = cls._load_cfg()
-        # Connecté en OAuth → rafraîchit la clé (elle peut tourner) avant de passer live.
-        if (cfg.get("oauth") or {}).get("access_token"):
-            try:
-                await cls.fetch_stream_key()
-            except Exception:
-                pass
-            cfg = cls._load_cfg()
-        key = cfg.get("key")
-        if not key:
-            return {"ok": False, "error": "no_key"}
+        key = None
+        if not record_only:
+            # Connecté en OAuth → rafraîchit la clé (elle peut tourner) avant de passer live.
+            if (cfg.get("oauth") or {}).get("access_token"):
+                try:
+                    await cls.fetch_stream_key()
+                except Exception:
+                    pass
+                cfg = cls._load_cfg()
+            key = cfg.get("key")
+            if not key:
+                return {"ok": False, "error": "no_key"}
         if cls._stream_proc is not None and cls._stream_proc.returncode is None:
             return {"ok": True, "already": True}
         if not os.path.exists("/dev/video42"):
@@ -955,10 +1026,23 @@ class Plugin:
                      f"[mx]aresample=async=1:first_pts=0[aout]",
                      "-map", "0:v", "-map", "[aout]"]
         args += ["-c:a", "aac", "-b:a", f"{ab}k", "-ar", "44100",
-                 "-max_muxing_queue_size", "1024",
-                 "-f", "flv", f"{ingest}/{key}"]
+                 "-max_muxing_queue_size", "1024"]
+        # Sorties : RTMP seul, mkv seul (enregistrement), ou les deux via tee.
+        # mkv = conteneur qui survit à un crash (contrairement au mp4).
+        rec = record_only or bool(st.get("record"))
+        cls._record_path = cls._new_record_path() if rec else None
+        cls._record_only = record_only
+        if record_only:
+            args += ["-f", "matroska", cls._record_path]
+        elif rec:
+            args += ["-flags", "+global_header", "-f", "tee",
+                     f"[f=flv:onfail=ignore]{ingest}/{key}"
+                     f"|[f=matroska]{cls._record_path}"]
+        else:
+            args += ["-f", "flv", f"{ingest}/{key}"]
         logger.info(f"[stream] encodeur={enc} {w or 'source'}x{h or ''}@{fps} "
-                    f"{vb}kbps mic={bool(mic_src)} discord={bool(discord_on and disc_mon)}")
+                    f"{vb}kbps mic={bool(mic_src)} discord={bool(discord_on and disc_mon)} "
+                    f"record={cls._record_path or '-'} record_only={record_only}")
         try:
             cls._stream_proc = await create_subprocess_exec(
                 *args, stdout=PIPE, stderr=PIPE, env=bcenv.user_env())
@@ -1028,6 +1112,86 @@ class Plugin:
         cls._mic_so_idx = None
         cls._mic_muted = False
 
+    # ── Enregistrement local ───────────────────────────────────────────────────
+    @staticmethod
+    def _videos_dir():
+        """Dossier Vidéos de l'user (XDG, localisé « Vidéos » en FR) + /BoneCast."""
+        home = os.path.expanduser("~")
+        base = os.path.join(home, "Videos")
+        try:
+            with open(os.path.join(home, ".config", "user-dirs.dirs")) as f:
+                for line in f:
+                    if line.startswith("XDG_VIDEOS_DIR="):
+                        raw = line.split("=", 1)[1].strip().strip('"')
+                        base = raw.replace("$HOME", home)
+                        break
+        except Exception:
+            pass
+        path = os.path.join(base, "BoneCast")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    @classmethod
+    def _new_record_path(cls):
+        from datetime import datetime
+        name = datetime.now().strftime("bonecast-%Y%m%d-%H%M%S.mkv")
+        return os.path.join(cls._videos_dir(), name)
+
+    # ── BRB : pause à l'antenne sans couper le live ────────────────────────────
+    # Le ffmpeg du live lit /dev/video42 en continu ; pour « passer en pause »
+    # on remplace juste ce qui ALIMENTE le device : le feeder gst est tué et un
+    # petit ffmpeg lavfi pousse un écran sombre avec un symbole pause (drawbox
+    # pur = zéro dépendance fonts). Même format que gst_camera.py (YUYV 720p30),
+    # sinon le lecteur décroche. Au retour, on relance le feeder normal.
+    @classmethod
+    async def brb_start(cls):
+        from asyncio import create_subprocess_exec, sleep
+        from subprocess import PIPE, DEVNULL
+        if cls._stream_proc is None or cls._stream_proc.returncode is not None:
+            return {"ok": False, "error": "not_streaming"}
+        if cls._brb_proc is not None and cls._brb_proc.returncode is None:
+            return {"ok": True, "already": True}
+        await cls._stop_camera_feeder()
+        await sleep(0.3)
+        bars = ("drawbox=x=iw/2-70:y=ih/2-90:w=50:h=180:color=white@0.85:t=fill,"
+                "drawbox=x=iw/2+20:y=ih/2-90:w=50:h=180:color=white@0.85:t=fill")
+        try:
+            cls._brb_proc = await create_subprocess_exec(
+                "ffmpeg", "-hide_banner", "-loglevel", "warning", "-re",
+                "-f", "lavfi", "-i", "color=c=0x18181B:size=1280x720:rate=30",
+                "-vf", bars, "-pix_fmt", "yuyv422",
+                "-f", "v4l2", "/dev/video42",
+                stdout=DEVNULL, stderr=PIPE, env=bcenv.user_env())
+            create_task(stream_watcher(cls._brb_proc.stderr, True, prefix="[brb]"))
+        except Exception as e:
+            logger.warning(f"[brb] start failed: {e!r}")
+            await cls._start_camera_feeder()
+            return {"ok": False, "error": str(e)}
+        # micro coupé pendant la pause (rétabli au retour s'il était ouvert)
+        cls._brb_restore_mic = cls._mic_active and not cls._mic_muted
+        if cls._brb_restore_mic:
+            await cls.set_mic_mute(True)
+        logger.info("[brb] pause à l'antenne")
+        return {"ok": True}
+
+    @classmethod
+    async def brb_stop(cls):
+        proc = cls._brb_proc
+        cls._brb_proc = None
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.terminate()
+                await proc.wait()
+            except Exception:
+                pass
+        if cls._stream_proc is not None and cls._stream_proc.returncode is None:
+            await cls._start_camera_feeder()
+        if cls._brb_restore_mic:
+            cls._brb_restore_mic = False
+            await cls.set_mic_mute(False)
+        logger.info("[brb] retour à l'antenne")
+        return {"ok": True}
+
     @classmethod
     async def stop_stream(cls):
         import signal as _sig
@@ -1050,11 +1214,17 @@ class Plugin:
                         await proc.wait()
             except Exception:
                 pass
+        # BRB éventuel : tuer le writer lavfi sans relancer le feeder (le live
+        # est fini) ; brb_stop ne relance le feeder que si le stream tourne.
+        await cls.brb_stop()
         await cls._stop_camera_feeder()
         await cls._audio_bridge_stop()           # remet Vesktop sur la vraie sortie
         cls._reset_mic_state()
-        logger.info("[stream] live arrêté")
-        return {"ok": True}
+        rec = cls._record_path
+        cls._record_path = None
+        cls._record_only = False
+        logger.info(f"[stream] live arrêté{' — enregistré: ' + rec if rec else ''}")
+        return {"ok": True, "record_path": rec}
 
     @classmethod
     async def get_stream_status(cls):
@@ -1062,8 +1232,11 @@ class Plugin:
         live = p is not None and p.returncode is None
         if not live:
             cls._reset_mic_state()
+        brb = cls._brb_proc is not None and cls._brb_proc.returncode is None
         return {"streaming": live, "mic": live and cls._mic_active,
-                "mic_muted": cls._mic_muted}
+                "mic_muted": cls._mic_muted, "brb": live and brb,
+                "record_path": cls._record_path if live else None,
+                "record_only": live and cls._record_only}
 
     # ── Cycle de vie ─────────────────────────────────────────────────────────
     @classmethod

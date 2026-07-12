@@ -21,12 +21,19 @@ CHAT_HTML = os.path.join(HERE, "chat.html")
 
 
 def set_overlay_atom(xid):
-    """Pose GAMESCOPE_EXTERNAL_OVERLAY=1 (comme mangoapp)."""
+    """Pose GAMESCOPE_EXTERNAL_OVERLAY=1 (comme mangoapp) + type fenêtre OSD.
+    Le type KDE « on-screen-display » (popup de volume) vit dans une couche
+    KWin AU-DESSUS du plein écran ACTIF — sans lui, Big Picture focalisé
+    recouvre l'overlay (la couche notification passe dessous)."""
     try:
         from Xlib import display, Xatom
         d = display.Display()
         w = d.create_resource_object("window", xid)
         w.change_property(d.intern_atom("GAMESCOPE_EXTERNAL_OVERLAY"), Xatom.CARDINAL, 32, [1])
+        w.change_property(
+            d.intern_atom("_NET_WM_WINDOW_TYPE"), Xatom.ATOM, 32,
+            [d.intern_atom("_KDE_NET_WM_WINDOW_TYPE_ON_SCREEN_DISPLAY"),
+             d.intern_atom("_NET_WM_WINDOW_TYPE_NOTIFICATION")])
         d.sync(); d.close()
         return True
     except Exception as e:
@@ -37,7 +44,7 @@ def set_overlay_atom(xid):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--channel", required=True)
-    ap.add_argument("--state-dir", default=os.path.expanduser("~/.local/share/steamcord/twitch_overlay"))
+    ap.add_argument("--state-dir", default=os.path.expanduser("~/.local/share/bonecast/twitch_overlay"))
     args = ap.parse_args()
 
     channel = args.channel.strip().lstrip("#").lower()
@@ -74,7 +81,17 @@ def main():
     win.set_skip_taskbar_hint(True)
     win.set_skip_pager_hint(True)
     win.set_app_paintable(True)
-    win.set_title("Steamcord Twitch Chat")
+    win.set_title("BoneCast Twitch Chat")
+    # Overlay = affichage PUR : ne doit JAMAIS prendre le focus ni manger les
+    # inputs. En gamemode gamescope l'isole déjà (plan overlay), mais en
+    # Bureau/Big Picture la fenêtre plein écran volait le focus de Steam →
+    # plus aucun input possible. accept_focus(False) + keep_above + région
+    # d'input VIDE (posée au map, plus bas) = clics/manette traversent.
+    win.set_accept_focus(False)
+    win.set_focus_on_map(False)
+    win.set_can_focus(False)
+    win.set_keep_above(True)
+    win.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION)
 
     # Taille EXPLICITE = plein écran de la sortie (gamescope over-game ne honore
     # pas toujours fullscreen() → sans taille, GTK dimensionne la fenêtre à la
@@ -108,9 +125,21 @@ def main():
     win.add(wv)
 
     def on_map(_w):
-        xid = win.get_window().get_xid()
+        gdk_win = win.get_window()
+        xid = gdk_win.get_xid()
         ok = set_overlay_atom(xid)
-        print("[overlay] mapped xid=%s atom=%s channel=%s" % (hex(xid), ok, channel), flush=True)
+        # Région d'input VIDE (X11 Shape) : la fenêtre devient transparente aux
+        # clics/touches — tout passe à la fenêtre du dessous (Steam/jeu). À poser
+        # après le map, sinon GTK/WebKit la réinitialise.
+        try:
+            import cairo
+            gdk_win.input_shape_combine_region(cairo.Region(), 0, 0)
+            passthrough = True
+        except Exception as e:
+            passthrough = False
+            print("[overlay] input passthrough KO:", e, flush=True)
+        print("[overlay] mapped xid=%s atom=%s passthrough=%s channel=%s"
+              % (hex(xid), ok, passthrough, channel), flush=True)
 
     win.connect("map", on_map)
     win.connect("destroy", Gtk.main_quit)

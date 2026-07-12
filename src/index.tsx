@@ -8,16 +8,41 @@ import {
   SliderField,
   Dropdown,
   DialogButton,
+  Focusable,
   Router,
 } from "@decky/ui";
 import { definePlugin, call } from "@decky/api";
 import { FaTwitch } from "react-icons/fa";
-import { focusHalo, TWITCH, DANGER } from "./components/Styled";
+import { focusHalo, ActionCard, TWITCH, DANGER } from "./components/Styled";
+import { t } from "./i18n";
 
 const B = DialogButton as any;
 
-// ── Section streaming : login OAuth + titre + catégorie auto ──────────────────
-function StreamSection() {
+// Onglet de navigation (même idiome que Steamcord : texte blanc forcé + fond
+// piloté nous-mêmes, sinon le focus natif du DialogButton peint un fond clair
+// sous notre texte blanc = illisible).
+const TabBtn = ({ active, focused, onClick, onFocus, onBlur, children }: any) => (
+  <B
+    onClick={onClick}
+    onFocus={onFocus} onBlur={onBlur}
+    onGamepadFocus={onFocus} onGamepadBlur={onBlur}
+    style={{
+      flex: "1 1 0", minWidth: 0, margin: 0, padding: "4px 0",
+      fontSize: 12, minHeight: 0, boxSizing: "border-box",
+      color: "#fff",
+      background: focused
+        ? "rgba(145,70,255,0.85)"
+        : active ? "rgba(145,70,255,0.35)" : "rgba(255,255,255,0.06)",
+      fontWeight: active ? 700 : 400,
+      ...focusHalo(TWITCH, focused),
+    }}
+  >
+    {children}
+  </B>
+);
+
+// ── Onglet LIVE : login OAuth + titre + go live + BRB/clip/micro ─────────────
+function LiveSection() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [login, setLogin] = useState("");
   const [keySet, setKeySet] = useState(false);
@@ -36,17 +61,12 @@ function StreamSection() {
   // mute micro à la volée (n'affecte que le stream, pas le vocal Discord)
   const [micActive, setMicActive] = useState(false);
   const [micMuted, setMicMuted] = useState(false);
-  // réglages du stream + encodeurs détectés
-  const [encoders, setEncoders] = useState<string[]>(["software"]);
-  const [steamcord, setSteamcord] = useState(false);
-  const [st, setSt] = useState<any>({ resolution: "720p", fps: 30, bitrate: 4500,
-    audio_bitrate: 160, keyframe: 2, encoder: "auto", mic: false });
-  // focus states
-  const [loginFocus, setLoginFocus] = useState(false);
-  const [logoutFocus, setLogoutFocus] = useState(false);
-  const [titleFocus, setTitleFocus] = useState(false);
-  const [liveFocus, setLiveFocus] = useState(false);
-  const [micFocus, setMicFocus] = useState(false);
+  const [stMic, setStMic] = useState(false);   // réglage « micro dans le stream »
+
+  const [brb, setBrb] = useState(false);
+  const [brbBusy, setBrbBusy] = useState(false);
+  const [clipBusy, setClipBusy] = useState(false);
+  const [recOnly, setRecOnly] = useState(false);
 
   const refresh = () =>
     call<[], any>("get_config").then((c: any) => {
@@ -55,23 +75,10 @@ function StreamSection() {
       setStreaming(!!c?.streaming);
       if (typeof c?.title === "string") setTitle(c.title);
       if (typeof c?.game_name === "string") setGameName(c.game_name);
-      if (c?.stream) setSt((p: any) => ({ ...p, ...c.stream }));
-      setSteamcord(!!c?.steamcord);
+      setStMic(!!c?.stream?.mic);
     }).catch(() => {});
 
   useEffect(() => { refresh(); }, []);
-
-  // Détecte les encodeurs dispo (matériel VAAPI + logiciel) une fois au montage.
-  useEffect(() => {
-    call<[], any>("get_encoders").then((e: any) => {
-      if (Array.isArray(e?.available)) setEncoders(e.available);
-    }).catch(() => {});
-  }, []);
-
-  // Applique un réglage et le persiste côté backend (par compte).
-  const pushSt = (patch: any) =>
-    setSt((prev: any) => { const next = { ...prev, ...patch };
-      call("set_stream_settings", next).catch(() => {}); return next; });
 
   // Tant qu'on est en live, surveille que ffmpeg n'a pas planté (reflète l'arrêt).
   useEffect(() => {
@@ -80,10 +87,11 @@ function StreamSection() {
       try {
         const r: any = await call("get_stream_status");
         if (!r?.streaming) {
-          setStreaming(false); setStreamMsg("⏹️ Live arrêté");
-          setMicActive(false); setMicMuted(false);
+          setStreaming(false); setStreamMsg(t("live_stopped"));
+          setMicActive(false); setMicMuted(false); setBrb(false); setRecOnly(false);
         } else {
           setMicActive(!!r?.mic); setMicMuted(!!r?.mic_muted);
+          setBrb(!!r?.brb); setRecOnly(!!r?.record_only);
         }
       } catch { /* on continue */ }
     }, 4000);
@@ -94,8 +102,9 @@ function StreamSection() {
     setStreamBusy(true); setStreamMsg("");
     try {
       if (streaming) {
-        await call("stop_stream"); setStreaming(false);
-        setMicActive(false); setMicMuted(false);
+        const r: any = await call("stop_stream"); setStreaming(false);
+        setMicActive(false); setMicMuted(false); setBrb(false); setRecOnly(false);
+        if (r?.record_path) setStreamMsg(t("recorded_to") + r.record_path);
       } else {
         // Catégorie Twitch auto = jeu en cours (Steam OU raccourci non-Steam).
         try {
@@ -105,18 +114,49 @@ function StreamSection() {
         const r: any = await call("start_stream");
         if (r?.ok) {
           setStreaming(true); setStreamMsg("");
-          setMicActive(!!st.mic); setMicMuted(false);
+          setMicActive(stMic); setMicMuted(false);
         }
         else setStreamMsg(
-          r?.error === "no_key" ? "⚠️ Clé introuvable — reconnecte-toi à Twitch"
+          r?.error === "no_key" ? t("err_no_key")
           // stand-alone : le backend fournit la commande exacte pour CET OS
-          : r?.error === "no_loopback" ? "⚠️ " + (r?.hint || "/dev/video42 absent (v4l2loopback non chargé)")
-          : r?.error === "no_ffmpeg" ? "⚠️ ffmpeg manquant — " + (r?.hint || "installe ffmpeg")
-          : r?.error === "no_x264" ? "⚠️ " + (r?.hint || "ffmpeg sans libx264")
-          : r?.error === "no_gst" ? "⚠️ " + (r?.hint || "bindings GStreamer/PipeWire manquants")
-          : "⚠️ " + (r?.hint || r?.error || "échec du live"));
+          : r?.error === "no_loopback" ? "⚠️ " + (r?.hint || t("hint_no_loopback"))
+          : r?.error === "no_ffmpeg" ? "⚠️ " + (r?.hint || t("hint_no_ffmpeg"))
+          : r?.error === "no_x264" ? "⚠️ " + (r?.hint || t("hint_no_x264"))
+          : r?.error === "no_gst" ? "⚠️ " + (r?.hint || t("hint_no_gst"))
+          : "⚠️ " + (r?.hint || r?.error || t("err_live_failed")));
       }
     } finally { setStreamBusy(false); }
+  };
+
+  // Enregistrement local SANS passer en live (mkv dans Vidéos/BoneCast).
+  const startRecordOnly = async () => {
+    setStreamBusy(true); setStreamMsg("");
+    try {
+      const r: any = await call<[boolean], any>("start_stream", true);
+      if (r?.ok) { setStreaming(true); setRecOnly(true); setMicActive(stMic); }
+      else setStreamMsg("⚠️ " + (r?.hint || r?.error || t("err_record_failed")));
+    } finally { setStreamBusy(false); }
+  };
+
+  // BRB : écran pause à l'antenne (le live continue, micro auto-coupé).
+  const toggleBrb = async () => {
+    setBrbBusy(true);
+    try {
+      const r: any = await call(brb ? "brb_stop" : "brb_start");
+      if (r?.ok) setBrb(!brb);
+    } finally { setBrbBusy(false); }
+  };
+
+  // Clip des ~30 dernières secondes (Twitch met ~15 s à le publier).
+  const doClip = async () => {
+    setClipBusy(true);
+    try {
+      const r: any = await call("create_clip");
+      setStreamMsg(r?.ok ? t("clip_created")
+        : r?.error === "missing_scope" ? t("reconnect_scopes")
+        : r?.error === "not_live" ? t("clip_not_live")
+        : "⚠️ " + (r?.error || t("err_clip_failed")));
+    } finally { setClipBusy(false); }
   };
 
   // Coupe/rétablit le micro sur le stream (n'affecte pas le vocal Discord).
@@ -136,12 +176,12 @@ function StreamSection() {
       try {
         const r: any = await call("auth_poll");
         if (r?.status === "ok") {
-          setAuthing(false); setAuthCode(""); setAuthMsg("✓ Connecté");
+          setAuthing(false); setAuthCode(""); setAuthMsg(t("auth_connected"));
           refresh();
         } else if (["expired", "denied", "error"].includes(r?.status)) {
           setAuthing(false); setAuthCode("");
-          setAuthMsg(r.status === "expired" ? "⏱️ Code expiré, réessaie"
-                   : r.status === "denied" ? "❌ Autorisation refusée" : "⚠️ Erreur");
+          setAuthMsg(r.status === "expired" ? t("auth_expired")
+                   : r.status === "denied" ? t("auth_denied") : t("auth_error"));
         }
       } catch { /* on continue à poller */ }
     }, 5000);
@@ -153,189 +193,130 @@ function StreamSection() {
     try {
       const r: any = await call("auth_start");
       if (r?.ok) { setAuthCode(r.user_code || ""); setAuthing(true); }
-      else setAuthMsg("⚠️ " + (r?.error || "erreur"));
+      else setAuthMsg("⚠️ " + (r?.error || t("err_generic")));
     } finally { setAuthBusy(false); }
   };
   const saveTitle = () =>
     call<[string], any>("set_title", titleInput)
       .then(() => { setTitle(titleInput); setTitleInput(""); refresh(); }).catch(() => {});
-  const doLogout = () => call("logout").then(refresh).catch(() => {});
+
+  if (!loggedIn) {
+    return (
+      <PanelSection title={t("twitch_title")}>
+        <PanelSectionRow>
+          <div style={{ fontSize: 11, opacity: 0.75, color: "#fff", marginBottom: 4 }}>
+            {t("login_intro")}
+          </div>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ActionCard color={TWITCH} active disabled={authBusy || authing} onClick={startAuth}>
+            🟣 {authing ? t("login_waiting") : authBusy ? "…" : t("login_button")}
+          </ActionCard>
+        </PanelSectionRow>
+        {authCode && (
+          <PanelSectionRow>
+            <div style={{ fontSize: 12, color: "#fff", lineHeight: 1.6, border: `1px solid ${TWITCH}`, borderRadius: 8, padding: 10, textAlign: "center" }}>
+              {t("go_to")} <span style={{ color: TWITCH, fontWeight: 700 }}>twitch.tv/activate</span> {t("and_enter")}
+              <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: 4, marginTop: 4 }}>{authCode}</div>
+            </div>
+          </PanelSectionRow>
+        )}
+        {authMsg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff" }}>{authMsg}</div></PanelSectionRow>}
+      </PanelSection>
+    );
+  }
 
   return (
-    <PanelSection title="📡 Twitch">
-      {loggedIn ? (
-        <>
-          <PanelSectionRow>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
-              <span style={{ color: TWITCH, fontWeight: 700, fontSize: 13 }}>
-                🟣 {login ? "@" + login : "Connecté"}
-              </span>
-              <B style={{ marginLeft: "auto", minWidth: 0, padding: "4px 10px", borderRadius: 6, color: "#fff", ...focusHalo(DANGER, logoutFocus) }}
-                onFocus={() => setLogoutFocus(true)} onBlur={() => setLogoutFocus(false)}
-                onGamepadFocus={() => setLogoutFocus(true)} onGamepadBlur={() => setLogoutFocus(false)}
-                onClick={doLogout}>Déconnexion</B>
+    <PanelSection title={t("live_title")}>
+      <PanelSectionRow>
+        <div style={{ fontSize: 13, color: TWITCH, fontWeight: 700 }}>
+          🟣 {login ? "@" + login : t("connected")}
+        </div>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <TextField label={t("title_label")} value={titleInput}
+          placeholder={title || t("title_placeholder")}
+          onChange={(e: any) => setTitleInput(e?.target?.value ?? "")} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ActionCard color={TWITCH} disabled={!titleInput} onClick={saveTitle}>
+          {t("save_title")}
+        </ActionCard>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
+          {t("category_auto")}{gameName ? ` : ${gameName}` : " " + t("category_detect")}
+        </div>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ActionCard color={streaming ? DANGER : TWITCH} active big
+          disabled={streamBusy || !keySet} onClick={toggleLive}>
+          {streamBusy ? "…" : streaming ? t("stop_live") : t("go_live")}
+        </ActionCard>
+      </PanelSectionRow>
+      {!streaming && (
+        <PanelSectionRow>
+          <ActionCard color={TWITCH} disabled={streamBusy} onClick={startRecordOnly}>
+            {t("record_only_btn")}
+          </ActionCard>
+        </PanelSectionRow>
+      )}
+      {streaming && (
+        <PanelSectionRow>
+          <div style={{ fontSize: 12, fontWeight: 800, color: DANGER, textAlign: "center" }}>
+            {recOnly ? t("status_rec")
+             : brb ? t("status_brb")
+             : t("status_live")}
+          </div>
+        </PanelSectionRow>
+      )}
+      {streaming && (
+        <PanelSectionRow>
+          <Focusable flow-children="horizontal" style={{ display: "flex", gap: 6, width: "100%" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <ActionCard color={brb ? DANGER : TWITCH} active={brb}
+                disabled={brbBusy} onClick={toggleBrb}>
+                {brb ? t("brb_back") : t("brb_pause")}
+              </ActionCard>
             </div>
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <TextField label="Titre du stream" value={titleInput}
-              placeholder={title || "Titre de ton live (modifiable en direct)"}
-              onChange={(e: any) => setTitleInput(e?.target?.value ?? "")} />
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <B disabled={!titleInput} style={{ width: "100%", borderRadius: 6, color: "#fff", ...focusHalo(TWITCH, titleFocus) }}
-              onFocus={() => setTitleFocus(true)} onBlur={() => setTitleFocus(false)}
-              onGamepadFocus={() => setTitleFocus(true)} onGamepadBlur={() => setTitleFocus(false)}
-              onClick={saveTitle}>💾 Enregistrer le titre</B>
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
-              🎮 Catégorie auto = jeu en cours{gameName ? ` : ${gameName}` : " (détecté au passage en live)"}
-            </div>
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <B disabled={streamBusy || !keySet}
-              style={{ width: "100%", borderRadius: 6, color: "#fff", fontWeight: 700,
-                background: streaming ? DANGER : TWITCH,
-                ...focusHalo(streaming ? DANGER : TWITCH, liveFocus) }}
-              onFocus={() => setLiveFocus(true)} onBlur={() => setLiveFocus(false)}
-              onGamepadFocus={() => setLiveFocus(true)} onGamepadBlur={() => setLiveFocus(false)}
-              onClick={toggleLive}>
-              {streamBusy ? "…" : streaming ? "⏹️ Arrêter le live" : "🔴 Passer en live"}
-            </B>
-          </PanelSectionRow>
-          {streaming && (
-            <PanelSectionRow>
-              <div style={{ fontSize: 12, fontWeight: 800, color: DANGER, textAlign: "center" }}>
-                ● EN DIRECT sur Twitch
+            {!recOnly && (
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <ActionCard color={TWITCH} disabled={clipBusy} onClick={doClip}>
+                  {clipBusy ? "…" : t("clip_btn")}
+                </ActionCard>
               </div>
-            </PanelSectionRow>
-          )}
-          {streaming && micActive && (
-            <PanelSectionRow>
-              <B style={{ width: "100%", borderRadius: 6, color: "#fff", fontWeight: 700,
-                background: micMuted ? DANGER : "transparent",
-                ...focusHalo(micMuted ? DANGER : TWITCH, micFocus) }}
-                onFocus={() => setMicFocus(true)} onBlur={() => setMicFocus(false)}
-                onGamepadFocus={() => setMicFocus(true)} onGamepadBlur={() => setMicFocus(false)}
-                onClick={toggleMicMute}>
-                {micMuted ? "🔇 Micro coupé (cliquer pour rétablir)" : "🎙️ Couper le micro"}
-              </B>
-            </PanelSectionRow>
-          )}
-          {streamMsg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff" }}>{streamMsg}</div></PanelSectionRow>}
-          {!keySet && (
-            <PanelSectionRow>
-              <div style={{ fontSize: 11, opacity: 0.6, color: "#fff" }}>
-                🔑 Récupération de la clé de stream…
-              </div>
-            </PanelSectionRow>
-          )}
-          <PanelSectionRow>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", opacity: 0.85, marginTop: 4 }}>
-              ⚙️ Réglages du stream
-            </div>
-          </PanelSectionRow>
-              <PanelSectionRow>
-                <Dropdown strDefaultLabel="Résolution" selectedOption={st.resolution}
-                  rgOptions={[
-                    { data: "720p", label: "720p (1280×720)" },
-                    { data: "800p", label: "800p (1280×800)" },
-                    { data: "1080p", label: "1080p (1920×1080)" },
-                    { data: "source", label: "Source (sans mise à l'échelle)" },
-                  ]} onChange={(e: any) => pushSt({ resolution: e.data })} />
-              </PanelSectionRow>
-              <PanelSectionRow>
-                <Dropdown strDefaultLabel="Images/s" selectedOption={st.fps}
-                  rgOptions={[{ data: 30, label: "30 fps" }, { data: 60, label: "60 fps" }]}
-                  onChange={(e: any) => pushSt({ fps: e.data })} />
-              </PanelSectionRow>
-              <PanelSectionRow>
-                <SliderField label={`Débit vidéo ${st.bitrate} kbps`} value={st.bitrate}
-                  min={1500} max={8000} step={250} showValue={false}
-                  onChange={(v: number) => pushSt({ bitrate: v })} bottomSeparator="none" />
-              </PanelSectionRow>
-              <PanelSectionRow>
-                <SliderField label={`Débit audio ${st.audio_bitrate} kbps`} value={st.audio_bitrate}
-                  min={96} max={320} step={16} showValue={false}
-                  onChange={(v: number) => pushSt({ audio_bitrate: v })} bottomSeparator="none" />
-              </PanelSectionRow>
-              <PanelSectionRow>
-                <SliderField label={`Intervalle keyframe ${st.keyframe}s`} value={st.keyframe}
-                  min={1} max={5} step={1} showValue={false}
-                  onChange={(v: number) => pushSt({ keyframe: v })} bottomSeparator="none" />
-              </PanelSectionRow>
-              <PanelSectionRow>
-                <Dropdown strDefaultLabel="Encodeur" selectedOption={st.encoder}
-                  rgOptions={[
-                    { data: "auto", label: "Auto (recommandé)" },
-                    { data: "software", label: "Logiciel — x264 (universel)" },
-                    ...(encoders.includes("nvenc")
-                      ? [{ data: "nvenc", label: "Matériel — NVENC (Nvidia)" }] : []),
-                    ...(encoders.includes("vaapi")
-                      ? [{ data: "vaapi", label: "Matériel — VAAPI (AMD/Intel)" }] : []),
-                  ]} onChange={(e: any) => pushSt({ encoder: e.data })} />
-              </PanelSectionRow>
-              <PanelSectionRow>
-                <div style={{ fontSize: 10, opacity: 0.6, color: "#fff" }}>
-                  {encoders.includes("nvenc")
-                    ? "GPU Nvidia détecté : encodage matériel NVENC disponible."
-                    : encoders.includes("vaapi")
-                    ? "GPU compatible : encodage matériel VAAPI disponible."
-                    : "Pas d'encodage matériel sur ce GPU → logiciel (x264)."}
-                </div>
-              </PanelSectionRow>
-              <PanelSectionRow>
-                <ToggleField label="🎙️ Ajouter le micro" checked={!!st.mic}
-                  description="Mixe ton micro par défaut avec le son du jeu"
-                  onChange={(v: boolean) => pushSt({ mic: v })} bottomSeparator="none" />
-              </PanelSectionRow>
-              {steamcord && (
-                <PanelSectionRow>
-                  <ToggleField label="💬 Ajouter le son Discord au stream"
-                    checked={!!st.discord_audio}
-                    description="Mixe la voix de ta conversation Discord (Steamcord) dans le live"
-                    onChange={(v: boolean) => pushSt({ discord_audio: v })} bottomSeparator="none" />
-                </PanelSectionRow>
-              )}
-        </>
-      ) : (
-        <>
-          <PanelSectionRow>
-            <div style={{ fontSize: 11, opacity: 0.75, color: "#fff", marginBottom: 4 }}>
-              Connecte ton compte Twitch : clé récupérée automatiquement + titre & catégorie éditables.
-            </div>
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <B disabled={authBusy || authing}
-              style={{ width: "100%", borderRadius: 6, color: "#fff", background: TWITCH, ...focusHalo(TWITCH, loginFocus) }}
-              onFocus={() => setLoginFocus(true)} onBlur={() => setLoginFocus(false)}
-              onGamepadFocus={() => setLoginFocus(true)} onGamepadBlur={() => setLoginFocus(false)}
-              onClick={startAuth}>
-              🟣 {authing ? "En attente d'autorisation…" : authBusy ? "…" : "Se connecter à Twitch"}
-            </B>
-          </PanelSectionRow>
-          {authCode && (
-            <PanelSectionRow>
-              <div style={{ fontSize: 12, color: "#fff", lineHeight: 1.6, border: `1px solid ${TWITCH}`, borderRadius: 8, padding: 10, textAlign: "center" }}>
-                Va sur <span style={{ color: TWITCH, fontWeight: 700 }}>twitch.tv/activate</span> et entre :
-                <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: 4, marginTop: 4 }}>{authCode}</div>
-              </div>
-            </PanelSectionRow>
-          )}
-          {authMsg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff" }}>{authMsg}</div></PanelSectionRow>}
-        </>
+            )}
+          </Focusable>
+        </PanelSectionRow>
+      )}
+      {streaming && micActive && (
+        <PanelSectionRow>
+          <ActionCard color={micMuted ? DANGER : TWITCH} active={micMuted} onClick={toggleMicMute}>
+            {micMuted ? t("mic_muted_btn") : t("mic_mute_btn")}
+          </ActionCard>
+        </PanelSectionRow>
+      )}
+      {streamMsg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff", wordBreak: "break-word" }}>{streamMsg}</div></PanelSectionRow>}
+      {!keySet && (
+        <PanelSectionRow>
+          <div style={{ fontSize: 11, opacity: 0.6, color: "#fff" }}>
+            {t("key_fetching")}
+          </div>
+        </PanelSectionRow>
       )}
     </PanelSection>
   );
 }
 
-// ── Section overlay chat ──────────────────────────────────────────────────────
-function OverlaySection() {
+// ── Onglet CHAT : overlay + écrire dans son chat ─────────────────────────────
+function ChatSection() {
   const [channelInput, setChannelInput] = useState("");
   const [channelSet, setChannelSet] = useState("");
-  const [chFocus, setChFocus] = useState(false);
   const [overlayOn, setOverlayOn] = useState(false);
   const [ov, setOv] = useState<any>({ opacity: 62, fontSize: 13, width: 360, height: 460, pos: "tr", badges: true, thirdParty: true });
+  const [chatInput, setChatInput] = useState("");
+  const [chatMsg, setChatMsg] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
 
   const refresh = () =>
     call<[], any>("get_config").then((c: any) => {
@@ -353,72 +334,193 @@ function OverlaySection() {
     refresh();
   };
 
+  // Message dans SON chat Twitch (Helix — nécessite le scope user:write:chat).
+  const sendChat = async () => {
+    if (!chatInput.trim()) return;
+    setChatBusy(true); setChatMsg("");
+    try {
+      const r: any = await call<[string], any>("send_chat", chatInput);
+      if (r?.ok) { setChatInput(""); setChatMsg(t("sent")); }
+      else setChatMsg(r?.error === "missing_scope"
+        ? t("reconnect_scopes")
+        : "⚠️ " + (r?.error || t("err_send_failed")));
+    } finally { setChatBusy(false); }
+  };
+
   return (
-    <PanelSection title="💬 Overlay chat">
+    <>
+      <PanelSection title={t("chat_write_title")}>
+        <PanelSectionRow>
+          <TextField label={t("message_label")} value={chatInput}
+            placeholder={t("chat_placeholder")}
+            onChange={(e: any) => setChatInput(e?.target?.value ?? "")} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ActionCard color={TWITCH} disabled={chatBusy || !chatInput.trim()} onClick={sendChat}>
+            {chatBusy ? "…" : t("send")}
+          </ActionCard>
+        </PanelSectionRow>
+        {chatMsg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff" }}>{chatMsg}</div></PanelSectionRow>}
+      </PanelSection>
+      <PanelSection title={t("overlay_title")}>
+        <PanelSectionRow>
+          <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
+            {channelSet ? t("channel_current", { ch: channelSet }) : t("channel_none")}
+          </div>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <TextField label={t("channel_other_label")} value={channelInput}
+            placeholder={channelSet || t("channel_placeholder")}
+            onChange={(e: any) => setChannelInput(e?.target?.value ?? "")} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ActionCard color={TWITCH} disabled={!channelInput}
+            onClick={() => call<[string], any>("set_channel", channelInput)
+              .then(() => { setChannelInput(""); refresh(); }).catch(() => {})}>
+            {t("channel_use")}
+          </ActionCard>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField label={t("overlay_show")}
+            description={channelSet ? t("overlay_desc") : t("overlay_need_channel")}
+            checked={overlayOn} onChange={toggleOverlay} disabled={!channelSet} bottomSeparator="none" />
+        </PanelSectionRow>
+        {overlayOn && (
+          <>
+            <PanelSectionRow>
+              <SliderField label={t("opacity", { v: ov.opacity })} value={ov.opacity}
+                min={10} max={95} step={5} showValue={false}
+                onChange={(v: number) => pushOv({ opacity: v })} bottomSeparator="none" />
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <SliderField label={t("font_size", { v: ov.fontSize })} value={ov.fontSize}
+                min={10} max={22} step={1} showValue={false}
+                onChange={(v: number) => pushOv({ fontSize: v })} bottomSeparator="none" />
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <SliderField label={t("width", { v: ov.width })} value={ov.width}
+                min={240} max={640} step={10} showValue={false}
+                onChange={(v: number) => pushOv({ width: v })} bottomSeparator="none" />
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <SliderField label={t("height", { v: ov.height })} value={ov.height}
+                min={200} max={900} step={20} showValue={false}
+                onChange={(v: number) => pushOv({ height: v })} bottomSeparator="none" />
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <Dropdown rgOptions={[
+                { data: "tl", label: t("pos_tl") }, { data: "tr", label: t("pos_tr") },
+                { data: "bl", label: t("pos_bl") }, { data: "br", label: t("pos_br") },
+              ]} selectedOption={ov.pos} onChange={(e: any) => pushOv({ pos: e.data })}
+                strDefaultLabel={t("position")} />
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ToggleField label={t("show_badges")} checked={!!ov.badges}
+                onChange={(v: boolean) => pushOv({ badges: v })} bottomSeparator="none" />
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ToggleField label={t("third_party_emotes")} checked={!!ov.thirdParty}
+                onChange={(v: boolean) => pushOv({ thirdParty: v })} bottomSeparator="none" />
+            </PanelSectionRow>
+          </>
+        )}
+      </PanelSection>
+    </>
+  );
+}
+
+// ── Onglet CONFIG : réglages stream + mises à jour + à propos + déconnexion ──
+function StreamSettings() {
+  const [encoders, setEncoders] = useState<string[]>(["software"]);
+  const [steamcord, setSteamcord] = useState(false);
+  const [st, setSt] = useState<any>({ resolution: "720p", fps: 30, bitrate: 4500,
+    audio_bitrate: 160, keyframe: 2, encoder: "auto", mic: false, record: false });
+
+  useEffect(() => {
+    call<[], any>("get_config").then((c: any) => {
+      if (c?.stream) setSt((p: any) => ({ ...p, ...c.stream }));
+      setSteamcord(!!c?.steamcord);
+    }).catch(() => {});
+    call<[], any>("get_encoders").then((e: any) => {
+      if (Array.isArray(e?.available)) setEncoders(e.available);
+    }).catch(() => {});
+  }, []);
+
+  // Applique un réglage et le persiste côté backend (par compte).
+  const pushSt = (patch: any) =>
+    setSt((prev: any) => { const next = { ...prev, ...patch };
+      call("set_stream_settings", next).catch(() => {}); return next; });
+
+  return (
+    <PanelSection title={t("quality_title")}>
       <PanelSectionRow>
-        <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
-          {channelSet ? `Chaîne : ${channelSet} (auto depuis ton compte)` : "Connecte-toi à Twitch, ou saisis une chaîne ci-dessous."}
+        <Dropdown strDefaultLabel={t("resolution")} selectedOption={st.resolution}
+          rgOptions={[
+            { data: "720p", label: "720p (1280×720)" },
+            { data: "800p", label: "800p (1280×800)" },
+            { data: "1080p", label: "1080p (1920×1080)" },
+            { data: "source", label: t("res_source") },
+          ]} onChange={(e: any) => pushSt({ resolution: e.data })} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <Dropdown strDefaultLabel={t("fps_label")} selectedOption={st.fps}
+          rgOptions={[{ data: 30, label: "30 fps" }, { data: 60, label: "60 fps" }]}
+          onChange={(e: any) => pushSt({ fps: e.data })} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <SliderField label={t("video_bitrate", { v: st.bitrate })} value={st.bitrate}
+          min={1500} max={8000} step={250} showValue={false}
+          onChange={(v: number) => pushSt({ bitrate: v })} bottomSeparator="none" />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <SliderField label={t("audio_bitrate", { v: st.audio_bitrate })} value={st.audio_bitrate}
+          min={96} max={320} step={16} showValue={false}
+          onChange={(v: number) => pushSt({ audio_bitrate: v })} bottomSeparator="none" />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <SliderField label={t("keyframe_interval", { v: st.keyframe })} value={st.keyframe}
+          min={1} max={5} step={1} showValue={false}
+          onChange={(v: number) => pushSt({ keyframe: v })} bottomSeparator="none" />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <Dropdown strDefaultLabel={t("encoder")} selectedOption={st.encoder}
+          rgOptions={[
+            { data: "auto", label: t("enc_auto") },
+            { data: "software", label: t("enc_software") },
+            ...(encoders.includes("nvenc")
+              ? [{ data: "nvenc", label: t("enc_nvenc") }] : []),
+            ...(encoders.includes("vaapi")
+              ? [{ data: "vaapi", label: t("enc_vaapi") }] : []),
+          ]} onChange={(e: any) => pushSt({ encoder: e.data })} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <div style={{ fontSize: 10, opacity: 0.6, color: "#fff" }}>
+          {encoders.includes("nvenc")
+            ? t("gpu_nvenc")
+            : encoders.includes("vaapi")
+            ? t("gpu_vaapi")
+            : t("gpu_software")}
         </div>
       </PanelSectionRow>
       <PanelSectionRow>
-        <TextField label="Regarder une autre chaîne (optionnel)" value={channelInput}
-          placeholder={channelSet || "ton_pseudo_twitch"}
-          onChange={(e: any) => setChannelInput(e?.target?.value ?? "")} />
+        <ToggleField label={t("mic_add")} checked={!!st.mic}
+          description={t("mic_add_desc")}
+          onChange={(v: boolean) => pushSt({ mic: v })} bottomSeparator="none" />
       </PanelSectionRow>
-      <PanelSectionRow>
-        <B disabled={!channelInput}
-          style={{ width: "100%", borderRadius: 6, color: "#fff", ...focusHalo(TWITCH, chFocus) }}
-          onFocus={() => setChFocus(true)} onBlur={() => setChFocus(false)}
-          onGamepadFocus={() => setChFocus(true)} onGamepadBlur={() => setChFocus(false)}
-          onClick={() => call<[string], any>("set_channel", channelInput)
-            .then(() => { setChannelInput(""); refresh(); }).catch(() => {})}>
-          💾 Utiliser cette chaîne
-        </B>
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ToggleField label="Afficher l'overlay chat"
-          description={channelSet ? "Fenêtre transparente par-dessus le jeu (mode jeu) ou le bureau" : "Renseigne d'abord ta chaîne"}
-          checked={overlayOn} onChange={toggleOverlay} disabled={!channelSet} bottomSeparator="none" />
-      </PanelSectionRow>
-      {overlayOn && (
-        <>
-          <PanelSectionRow>
-            <SliderField label={`Opacité ${ov.opacity}%`} value={ov.opacity}
-              min={10} max={95} step={5} showValue={false}
-              onChange={(v: number) => pushOv({ opacity: v })} bottomSeparator="none" />
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <SliderField label={`Taille du texte ${ov.fontSize}px`} value={ov.fontSize}
-              min={10} max={22} step={1} showValue={false}
-              onChange={(v: number) => pushOv({ fontSize: v })} bottomSeparator="none" />
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <SliderField label={`Largeur ${ov.width}px`} value={ov.width}
-              min={240} max={640} step={10} showValue={false}
-              onChange={(v: number) => pushOv({ width: v })} bottomSeparator="none" />
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <SliderField label={`Hauteur ${ov.height}px`} value={ov.height}
-              min={200} max={900} step={20} showValue={false}
-              onChange={(v: number) => pushOv({ height: v })} bottomSeparator="none" />
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <Dropdown rgOptions={[
-              { data: "tl", label: "↖ Haut-gauche" }, { data: "tr", label: "↗ Haut-droite" },
-              { data: "bl", label: "↙ Bas-gauche" }, { data: "br", label: "↘ Bas-droite" },
-            ]} selectedOption={ov.pos} onChange={(e: any) => pushOv({ pos: e.data })}
-              strDefaultLabel="Position" />
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <ToggleField label="Afficher les badges" checked={!!ov.badges}
-              onChange={(v: boolean) => pushOv({ badges: v })} bottomSeparator="none" />
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <ToggleField label="Emotes BTTV / 7TV / FFZ" checked={!!ov.thirdParty}
-              onChange={(v: boolean) => pushOv({ thirdParty: v })} bottomSeparator="none" />
-          </PanelSectionRow>
-        </>
+      {steamcord && (
+        <PanelSectionRow>
+          <ToggleField label={t("discord_audio")}
+            checked={!!st.discord_audio}
+            description={t("discord_audio_desc")}
+            onChange={(v: boolean) => pushSt({ discord_audio: v })} bottomSeparator="none" />
+        </PanelSectionRow>
       )}
+      <PanelSectionRow>
+        <ToggleField label={t("record_toggle")}
+          checked={!!st.record}
+          description={t("record_desc")}
+          onChange={(v: boolean) => pushSt({ record: v })} bottomSeparator="none" />
+      </PanelSectionRow>
     </PanelSection>
   );
 }
@@ -432,7 +534,6 @@ function UpdaterSection() {
   const [latest, setLatest] = useState("");
   const [current, setCurrent] = useState("");
   const [url, setUrl] = useState("");
-  const [focused, setFocused] = useState(false);
 
   useEffect(() => {
     call<[], boolean>("get_autoupdate").then((v) => setAuto(!!v)).catch(() => {});
@@ -462,27 +563,24 @@ function UpdaterSection() {
   };
 
   const label =
-    status === "checking" ? "Vérification…"
-    : status === "installing" ? "Installation…"
-    : status === "available" ? `Installer la v${latest}`
-    : status === "uptodate" ? `À jour (v${current})`
-    : status === "failed" ? "⚠️ Échec de la mise à jour"
-    : "Vérifier les mises à jour";
+    status === "checking" ? t("upd_checking")
+    : status === "installing" ? t("upd_installing")
+    : status === "available" ? t("upd_install", { v: latest })
+    : status === "uptodate" ? t("upd_uptodate", { v: current })
+    : status === "failed" ? t("upd_failed")
+    : t("upd_check");
 
   return (
-    <PanelSection title="🔄 Mises à jour">
+    <PanelSection title={t("updates_title")}>
       <PanelSectionRow>
-        <ToggleField label="Mise à jour automatique" checked={auto}
-          description="Installe les nouvelles versions au démarrage"
+        <ToggleField label={t("upd_auto")} checked={auto}
+          description={t("upd_auto_desc")}
           onChange={onToggle} bottomSeparator="none" />
       </PanelSectionRow>
       <PanelSectionRow>
-        <B style={{ width: "100%", borderRadius: 6, color: "#fff", ...focusHalo(TWITCH, focused) }}
-          onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-          onGamepadFocus={() => setFocused(true)} onGamepadBlur={() => setFocused(false)}
-          onClick={status === "available" ? doInstall : doCheck}>
+        <ActionCard color={TWITCH} onClick={status === "available" ? doInstall : doCheck}>
           🔄 {label}
-        </B>
+        </ActionCard>
       </PanelSectionRow>
       {status === "failed" && updErr ? (
         <PanelSectionRow>
@@ -493,12 +591,88 @@ function UpdaterSection() {
   );
 }
 
-function Content() {
+// À propos + déconnexion Twitch (bas de l'onglet Config, comme Steamcord).
+function AboutSection() {
+  const [version, setVersion] = useState("");
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [login, setLogin] = useState("");
+  useEffect(() => {
+    call<[], string>("get_version").then((v) => setVersion(v || "")).catch(() => {});
+    call<[], any>("get_config").then((c: any) => {
+      setLoggedIn(!!c?.logged_in); setLogin(c?.login || "");
+    }).catch(() => {});
+  }, []);
+  const open = (url: string) => { try { (window as any).SteamClient?.URL?.ExecuteSteamURL?.("steam://openurl/" + url); } catch {} };
+  const doLogout = () => call("logout").then(() => setLoggedIn(false)).catch(() => {});
+  return (
+    <PanelSection title={t("about_title")}>
+      <PanelSectionRow>
+        <div style={{ fontSize: 11, color: "#aaa", lineHeight: 1.6 }}>
+          <div><b style={{ color: "#fff" }}>BoneCast</b>{version ? ` v${version}` : ""} 🦴📡</div>
+          <div>{t("by")} <span style={{ color: TWITCH }}>Necrosiak</span></div>
+        </div>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ActionCard color={TWITCH} onClick={() => open("https://github.com/Necrosiak/BoneCast")}>
+          🔗 GitHub
+        </ActionCard>
+      </PanelSectionRow>
+      {loggedIn && (
+        <PanelSectionRow>
+          <ActionCard color={DANGER} onClick={doLogout}>
+            {t("logout")}{login ? ` (@${login})` : ""}
+          </ActionCard>
+        </PanelSectionRow>
+      )}
+    </PanelSection>
+  );
+}
+
+function ConfigSection() {
   return (
     <>
-      <StreamSection />
-      <OverlaySection />
+      <StreamSettings />
       <UpdaterSection />
+      <AboutSection />
+    </>
+  );
+}
+
+function Content() {
+  const [tab, setTab] = useState<"live" | "chat" | "config">("live");
+  const [focus, setFocus] = useState<string | null>(null);
+  return (
+    <>
+      <PanelSection>
+        <PanelSectionRow>
+          {/* Rangée d'onglets = UN arrêt de nav vertical, gauche/droite circule
+              entre les onglets (même idiome que Steamcord). */}
+          <Focusable flow-children="horizontal"
+            style={{ display: "flex", gap: 4, width: "100%", boxSizing: "border-box" }}>
+            <TabBtn active={tab === "live"} focused={focus === "live"}
+              onClick={() => setTab("live")}
+              onFocus={() => setFocus("live")}
+              onBlur={() => setFocus((f: any) => (f === "live" ? null : f))}>
+              {t("tab_live")}
+            </TabBtn>
+            <TabBtn active={tab === "chat"} focused={focus === "chat"}
+              onClick={() => setTab("chat")}
+              onFocus={() => setFocus("chat")}
+              onBlur={() => setFocus((f: any) => (f === "chat" ? null : f))}>
+              {t("tab_chat")}
+            </TabBtn>
+            <TabBtn active={tab === "config"} focused={focus === "config"}
+              onClick={() => setTab("config")}
+              onFocus={() => setFocus("config")}
+              onBlur={() => setFocus((f: any) => (f === "config" ? null : f))}>
+              {t("tab_config")}
+            </TabBtn>
+          </Focusable>
+        </PanelSectionRow>
+      </PanelSection>
+      {tab === "live" && <LiveSection />}
+      {tab === "chat" && <ChatSection />}
+      {tab === "config" && <ConfigSection />}
     </>
   );
 }
