@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.1 — 2026-07-20
+
+### Changed
+- **Monochrome SVG icons across the QAM UI**, matching the rest of the
+  Necrosiak plugin suite (Steamcord v1.16.1). Color emoji (save, controller,
+  broadcast, clip, mic, key, send, refresh, GitHub, logout, tabs) were
+  replaced with monochrome vector icons that inherit the surrounding text
+  size and color.
+
+### Fixed
+- **In-plugin updates failed on root-owned installs.** The updater overwrote
+  files with `shutil.copy2`, which ends with a `chmod` on the destination —
+  something a non-root process cannot do on root-owned files even when they
+  are world-writable. Files are now replaced via a temp file + atomic
+  `os.replace`, which only needs write permission on the directory — and
+  every replaced file becomes owned by the user, so a root-owned install
+  heals itself as it updates.
+
 ## 0.3.0 — 2026-07-12
 
 > ⚠️ This release adds Twitch permissions (`clips:edit`, `user:write:chat`).

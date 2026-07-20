@@ -13,6 +13,10 @@ import {
 } from "@decky/ui";
 import { definePlugin, call } from "@decky/api";
 import { FaTwitch } from "react-icons/fa";
+import {
+  IcBroadcast, IcChat, IcController, IcFilm, IcGithub, IcKey,
+  IcLogout, IcMic, IcMicMute, IcRefresh, IcSave, IcSend,
+} from "./components/Icons";
 import { focusHalo, ActionCard, TWITCH, DANGER } from "./components/Styled";
 import { t } from "./i18n";
 
@@ -210,7 +214,7 @@ function LiveSection() {
         </PanelSectionRow>
         <PanelSectionRow>
           <ActionCard color={TWITCH} active disabled={authBusy || authing} onClick={startAuth}>
-            🟣 {authing ? t("login_waiting") : authBusy ? "…" : t("login_button")}
+            <FaTwitch style={{ verticalAlign: "-0.125em" }} /> {authing ? t("login_waiting") : authBusy ? "…" : t("login_button")}
           </ActionCard>
         </PanelSectionRow>
         {authCode && (
@@ -230,7 +234,7 @@ function LiveSection() {
     <PanelSection title={t("live_title")}>
       <PanelSectionRow>
         <div style={{ fontSize: 13, color: TWITCH, fontWeight: 700 }}>
-          🟣 {login ? "@" + login : t("connected")}
+          <FaTwitch style={{ verticalAlign: "-0.125em" }} /> {login ? "@" + login : t("connected")}
         </div>
       </PanelSectionRow>
       <PanelSectionRow>
@@ -240,18 +244,18 @@ function LiveSection() {
       </PanelSectionRow>
       <PanelSectionRow>
         <ActionCard color={TWITCH} disabled={!titleInput} onClick={saveTitle}>
-          {t("save_title")}
+          <IcSave /> {t("save_title")}
         </ActionCard>
       </PanelSectionRow>
       <PanelSectionRow>
         <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
-          {t("category_auto")}{gameName ? ` : ${gameName}` : " " + t("category_detect")}
+          <IcController /> {t("category_auto")}{gameName ? ` : ${gameName}` : " " + t("category_detect")}
         </div>
       </PanelSectionRow>
       <PanelSectionRow>
         <ActionCard color={streaming ? DANGER : TWITCH} active big
           disabled={streamBusy || !keySet} onClick={toggleLive}>
-          {streamBusy ? "…" : streaming ? t("stop_live") : t("go_live")}
+          {streamBusy ? "…" : <><IcBroadcast /> {streaming ? t("stop_live") : t("go_live")}</>}
         </ActionCard>
       </PanelSectionRow>
       {!streaming && (
@@ -282,7 +286,7 @@ function LiveSection() {
             {!recOnly && (
               <div style={{ flex: 1, minWidth: 0 }}>
                 <ActionCard color={TWITCH} disabled={clipBusy} onClick={doClip}>
-                  {clipBusy ? "…" : t("clip_btn")}
+                  {clipBusy ? "…" : <><IcFilm /> {t("clip_btn")}</>}
                 </ActionCard>
               </div>
             )}
@@ -292,7 +296,7 @@ function LiveSection() {
       {streaming && micActive && (
         <PanelSectionRow>
           <ActionCard color={micMuted ? DANGER : TWITCH} active={micMuted} onClick={toggleMicMute}>
-            {micMuted ? t("mic_muted_btn") : t("mic_mute_btn")}
+            {micMuted ? <><IcMicMute /> {t("mic_muted_btn")}</> : <><IcMic /> {t("mic_mute_btn")}</>}
           </ActionCard>
         </PanelSectionRow>
       )}
@@ -300,7 +304,7 @@ function LiveSection() {
       {!keySet && (
         <PanelSectionRow>
           <div style={{ fontSize: 11, opacity: 0.6, color: "#fff" }}>
-            {t("key_fetching")}
+            <IcKey /> {t("key_fetching")}
           </div>
         </PanelSectionRow>
       )}
@@ -357,7 +361,7 @@ function ChatSection() {
         </PanelSectionRow>
         <PanelSectionRow>
           <ActionCard color={TWITCH} disabled={chatBusy || !chatInput.trim()} onClick={sendChat}>
-            {chatBusy ? "…" : t("send")}
+            {chatBusy ? "…" : <><IcSend /> {t("send")}</>}
           </ActionCard>
         </PanelSectionRow>
         {chatMsg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff" }}>{chatMsg}</div></PanelSectionRow>}
@@ -377,7 +381,7 @@ function ChatSection() {
           <ActionCard color={TWITCH} disabled={!channelInput}
             onClick={() => call<[string], any>("set_channel", channelInput)
               .then(() => { setChannelInput(""); refresh(); }).catch(() => {})}>
-            {t("channel_use")}
+            <IcSave /> {t("channel_use")}
           </ActionCard>
         </PanelSectionRow>
         <PanelSectionRow>
@@ -579,7 +583,7 @@ function UpdaterSection() {
       </PanelSectionRow>
       <PanelSectionRow>
         <ActionCard color={TWITCH} onClick={status === "available" ? doInstall : doCheck}>
-          🔄 {label}
+          <IcRefresh /> {label}
         </ActionCard>
       </PanelSectionRow>
       {status === "failed" && updErr ? (
@@ -614,13 +618,13 @@ function AboutSection() {
       </PanelSectionRow>
       <PanelSectionRow>
         <ActionCard color={TWITCH} onClick={() => open("https://github.com/Necrosiak/BoneCast")}>
-          🔗 GitHub
+          <IcGithub /> GitHub
         </ActionCard>
       </PanelSectionRow>
       {loggedIn && (
         <PanelSectionRow>
           <ActionCard color={DANGER} onClick={doLogout}>
-            {t("logout")}{login ? ` (@${login})` : ""}
+            <IcLogout /> {t("logout")}{login ? ` (@${login})` : ""}
           </ActionCard>
         </PanelSectionRow>
       )}
@@ -653,13 +657,13 @@ function Content() {
               onClick={() => setTab("live")}
               onFocus={() => setFocus("live")}
               onBlur={() => setFocus((f: any) => (f === "live" ? null : f))}>
-              {t("tab_live")}
+              <IcBroadcast /> {t("tab_live")}
             </TabBtn>
             <TabBtn active={tab === "chat"} focused={focus === "chat"}
               onClick={() => setTab("chat")}
               onFocus={() => setFocus("chat")}
               onBlur={() => setFocus((f: any) => (f === "chat" ? null : f))}>
-              {t("tab_chat")}
+              <IcChat /> {t("tab_chat")}
             </TabBtn>
             <TabBtn active={tab === "config"} focused={focus === "config"}
               onClick={() => setTab("config")}
