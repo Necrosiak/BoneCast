@@ -276,7 +276,7 @@ function LiveSection() {
       )}
       {streaming && (
         <PanelSectionRow>
-          <Focusable flow-children="horizontal" style={{ display: "flex", gap: 6, width: "100%" }}>
+          <Focusable flow-children="row" style={{ display: "flex", gap: 6, width: "100%" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <ActionCard color={brb ? DANGER : TWITCH} active={brb}
                 disabled={brbBusy} onClick={toggleBrb}>
@@ -651,7 +651,7 @@ function Content() {
         <PanelSectionRow>
           {/* Rangée d'onglets = UN arrêt de nav vertical, gauche/droite circule
               entre les onglets (même idiome que Steamcord). */}
-          <Focusable flow-children="horizontal"
+          <Focusable flow-children="row"
             style={{ display: "flex", gap: 4, width: "100%", boxSizing: "border-box" }}>
             <TabBtn active={tab === "live"} focused={focus === "live"}
               onClick={() => setTab("live")}
