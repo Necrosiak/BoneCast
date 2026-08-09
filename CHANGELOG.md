@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.2 — 2026-08-09
+
+### Fixed
+
+- **Controller navigation in rows of buttons.** `flow-children="horizontal"`
+  is not a value the Steam client's focus engine accepts: it falls through to
+  a default branch that logs `Unhandled flow-children` on every render and
+  produces no focus flow at all, which can break controller navigation and
+  even swallow state updates on rows that re-render often. Replaced with
+  `row`. This was fixed in the repository on 2026-07-23 and never made it
+  into a release until now.
+
 ## 0.3.1 — 2026-07-20
 
 ### Changed
