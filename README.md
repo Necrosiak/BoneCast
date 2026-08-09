@@ -58,6 +58,12 @@ Everything is driven from the QAM and survives reboots.
 
 BoneCast **auto-updates** itself from GitHub Releases (toggleable in the plugin's *Updates* section).
 
+> **A note on automatic updates.** Decky owns the plugin's top-level directory,
+> so the built-in updater can rewrite existing files but cannot create new ones.
+> A release that adds a file at the top level therefore has to be installed the
+> normal way — *Install plugin from URL*, above — rather than through the
+> automatic update. The release notes say so whenever that is the case.
+
 ---
 
 ## 🐧 Compatibility
