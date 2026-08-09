@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.3 — 2026-08-09
+
+### Fixed
+
+- **The in-plugin updater could not update anything on a normal install, and
+  said it had.** Decky root-owns the plugin's top-level directory, so creating
+  the temporary file the updater writes through failed with `Permission
+  denied` — even though the files being replaced belong to the user. Writing
+  in place is now used as a fallback when the temporary file cannot be created
+  but the destination exists and is writable.
+
+  Worse, the failure was reported as a success: `apply()` returns a dict, and
+  `{"ok": False, "error": …}` is always truthy in Python, so the auto-updater
+  logged "update installed" and restarted Decky anyway — on every boot, since
+  the installed version never changed. It now reads the result and logs why it
+  gave up.
+
 ## 0.3.2 — 2026-08-09
 
 ### Fixed

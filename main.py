@@ -1255,11 +1255,19 @@ class Plugin:
                 return
             logger.info(f"[updater] {info['latest']} dispo (installé "
                         f"{info['current']}) — application auto")
-            if await updater.apply(info["url"]):
+            # apply() renvoie un dict : {"ok": False, "error": …} est TOUJOURS
+            # vrai, donc un échec passait pour un succès et le loader
+            # redémarrait quand même — en boucle, puisque la version installée
+            # n'avait pas bougé. On lit le champ, pas la vérité du dict.
+            res = await updater.apply(info["url"])
+            if res.get("ok"):
                 from asyncio import sleep as _sleep
                 logger.info("[updater] mise à jour installée — rechargement")
                 await _sleep(2)
                 updater.restart_loader()
+            else:
+                logger.error(f"[updater] mise à jour abandonnée : "
+                             f"{res.get('error', 'raison inconnue')}")
         except Exception as e:
             logger.warning(f"[updater] auto-check: {e!r}")
 
