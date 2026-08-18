@@ -86,3 +86,7 @@ zijn net zo waardevol.
 ## Credits
 
 Gemaakt en onderhouden door **Necrosiak**. Onderdeel van de Necrosiak-pluginsuite voor de Steam-spelmodus.
+
+## AI-vermelding
+
+Bij het maken van dit project is AI gebruikt — voor reverse engineering, ontwikkeling en documentatie. **Niet** voor beeld of creatief schrijven. Alles wat wordt gepubliceerd is door een mens nagekeken, en het resultaat blijft mijn verantwoordelijkheid. Als je daar moeite mee hebt, weet je het nu.

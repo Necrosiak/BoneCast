@@ -87,3 +87,7 @@ inhabituelles sont tout aussi précieux.
 ## Crédits
 
 Créé et maintenu par **Necrosiak**. Fait partie de la suite de plugins Necrosiak pour le Mode Jeu Steam.
+
+## Mention IA
+
+L'IA a été utilisée dans la réalisation de ce projet — pour la rétro-ingénierie, le développement et la documentation. Elle n'a **pas** servi pour de l'art ni de l'écriture créative. Tout ce qui est publié est relu par un humain, et le résultat reste sous ma responsabilité. Si cela vous dérange, vous voilà informé.

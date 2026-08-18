@@ -90,3 +90,7 @@ Feature requests and "it works!" reports on unusual setups are just as valuable.
 ## Credits
 
 Created and maintained by **Necrosiak**. Part of the Necrosiak plugin suite for Steam Gaming Mode.
+
+## AI disclaimer
+
+AI was used in the making of this project — for reverse engineering, development and documentation. It was **not** used for any art or creative writing. Everything released publicly is reviewed by a human, and the results are my responsibility. If that is not something you are comfortable with, now you know.

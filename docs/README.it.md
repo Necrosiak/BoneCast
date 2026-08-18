@@ -86,3 +86,7 @@ sono altrettanto preziosi.
 ## Crediti
 
 Creato e mantenuto da **Necrosiak**. Fa parte della suite di plugin Necrosiak per la Modalità Gioco di Steam.
+
+## Nota sull'IA
+
+L'IA è stata usata nella realizzazione di questo progetto: per reverse engineering, sviluppo e documentazione. **Non** per grafica o scrittura creativa. Tutto ciò che viene pubblicato è riletto da un umano, e il risultato resta sotto la mia responsabilità. Se la cosa ti dà fastidio, ora lo sai.

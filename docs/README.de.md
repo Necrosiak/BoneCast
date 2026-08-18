@@ -86,3 +86,7 @@ genauso wertvoll.
 ## Credits
 
 Erstellt und gepflegt von **Necrosiak**. Teil der Necrosiak-Plugin-Suite für den Steam-Spielmodus.
+
+## KI-Hinweis
+
+Bei der Entwicklung dieses Projekts wurde KI eingesetzt — für Reverse Engineering, Entwicklung und Dokumentation. **Nicht** für Grafik oder kreatives Schreiben. Alles Veröffentlichte wird von einem Menschen geprüft, und ich stehe für das Ergebnis gerade. Wer damit nicht einverstanden ist, weiß nun Bescheid.

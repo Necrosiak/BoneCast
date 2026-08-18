@@ -86,3 +86,7 @@ igualmente valiosos.
 ## Créditos
 
 Criado e mantido por **Necrosiak**. Faz parte da suíte de plugins Necrosiak para o Modo Jogo do Steam.
+
+## Aviso sobre IA
+
+Foi usada IA na criação deste projeto: para engenharia reversa, desenvolvimento e documentação. **Não** foi usada para arte nem escrita criativa. Tudo o que é publicado é revisto por um humano, e o resultado é da minha responsabilidade. Se isso o incomoda, fica avisado.

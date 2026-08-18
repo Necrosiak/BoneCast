@@ -86,3 +86,7 @@ poco comunes son igual de valiosos.
 ## Créditos
 
 Creado y mantenido por **Necrosiak**. Forma parte de la suite de plugins de Necrosiak para el Modo Juego de Steam.
+
+## Aviso sobre IA
+
+Se usó IA en la creación de este proyecto: para ingeniería inversa, desarrollo y documentación. **No** se usó para arte ni escritura creativa. Todo lo publicado lo revisa una persona, y el resultado es responsabilidad mía. Si eso te incomoda, ya lo sabes.
