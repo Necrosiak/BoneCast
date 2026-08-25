@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.4 — 2026-08-25
+
+### Fixed
+
+- **The active Steam account could no longer be identified, after Steam changed
+  its files.** Steam stopped publishing a numeric `ActiveUser` in `registry.vdf`
+  — it now publishes `AutoLoginUser`, holding the account *name* — and dropped
+  `MostRecent` from `loginusers.vdf` in favour of `AutoLogin` and `Timestamp`.
+  Both probes came back empty and everything fell back to a generic profile.
+  The account is now resolved from `AutoLoginUser` matched by name, then
+  `AutoLogin`, then the most recent `Timestamp`; the older keys are still tried
+  first, so an older Steam behaves exactly as before.
+
 ## 0.3.3 — 2026-08-09
 
 ### Fixed
