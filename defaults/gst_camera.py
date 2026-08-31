@@ -16,7 +16,7 @@ import sys
 import time
 import json
 import logging
-from subprocess import getoutput
+from subprocess import getoutput, run, TimeoutExpired
 from gi import require_version  # type: ignore
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout,
@@ -61,13 +61,42 @@ def open_device_out():
     return fd
 
 
+def _pw_dump(timeout=5):
+    """Sortie de `pw-dump`, ou None. JAMAIS `getoutput()` nu ici.
+
+    Un `pw-dump` coincé ne rend jamais la main et ne lève rien : le `except`
+    d'en dessous ne se déclenchait donc pas, et le feeder restait pendu jusqu'au
+    redémarrage du plugin. Et le blocage se propage — un seul client pendu fait
+    taire tous les `pw-dump` suivants, donc on le purge avant de renoncer.
+
+    Mesuré le 31/08 sur la BC-250 : `pactl` répondait parfaitement pendant que
+    `pw-dump` et `pw-cli` étaient muets ; il y avait UN client pendu, et le tuer
+    a tout rétabli sur-le-champ. Ce n'est pas PipeWire qui meurt.
+    """
+    try:
+        return run(["pw-dump"], capture_output=True, text=True,
+                   timeout=timeout).stdout
+    except TimeoutExpired:
+        log.warning(f"pw-dump muet après {timeout}s — purge des clients pendus")
+        try:
+            run(["pkill", "-x", "pw-dump"], timeout=5)
+        except Exception:
+            pass
+    except Exception as e:
+        log.warning(f"pw-dump KO: {e!r}")
+    return None
+
+
 def find_screen_node():
     """Node PipeWire de l'écran gamescope (publie l'écran complet en mode jeu).
     Renvoie l'id (str) ou None."""
+    out = _pw_dump()
+    if out is None:
+        return None
     try:
-        data = json.loads(getoutput("pw-dump"))
+        data = json.loads(out)
     except Exception as e:
-        log.warning(f"pw-dump KO: {e!r}")
+        log.warning(f"pw-dump illisible: {e!r}")
         return None
     vids = []
     for n in data:
