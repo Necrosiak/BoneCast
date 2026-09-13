@@ -681,9 +681,66 @@ function Content() {
   );
 }
 
-export default definePlugin(() => ({
-  name: "BoneCast",
-  title: <div className={staticClasses.Title}>BoneCast</div>,
-  icon: <FaTwitch />,
-  content: <Content />,
-}));
+// Notif native Steam (DisplayClientNotification, type 1 = popup + son). Le
+// toaster Decky crée des entrées SANS notification_type qui ne s'affichent pas
+// et font PLANTER le panneau de notifs Steam sur ce build — c'est le constat
+// déjà fait dans Steamcord, SkullKey et le Toolkit, où ce helper existe depuis
+// longtemps ; BoneCast était le seul à ne pas l'avoir.
+function notify(data: { title?: string; body: string; duration?: number }) {
+  try {
+    const App = (window as any).App;
+    const steamid = App?.GetCurrentUser?.()?.strSteamID || App?.m_CurrentUser?.strSteamID || "";
+    // steamid OBLIGATOIRE : sans lui l'entrée est malformée et fait planter le
+    // panneau de notifs Steam → mieux vaut ne rien notifier.
+    if (!steamid) return;
+    (window as any).SteamClient?.ClientNotifications?.DisplayClientNotification?.(
+      1,
+      JSON.stringify({ title: data.title || "BoneCast", body: data.body, state: "active", steamid }),
+      () => {},
+    );
+  } catch (e) { console.error("[BoneCast] notify failed", e); }
+}
+
+// ── Auto-update : le frontend ne fait que PRÉVENIR ───────────────────────────
+// C'est le backend qui installe (il en a le droit : le dossier du plugin est à
+// root, mais les fichiers dedans nous appartiennent). Lui seul ne peut pas
+// notifier — d'où ce relais.
+//
+// ⛔ Surtout NE PAS appeler `DeckyBackend.call('utilities/install_plugin', …)` :
+// c'est la route du Store Decky. Elle décompresse, puis déclare l'install à
+// plugins.deckbrew.xyz, qui ne connaît pas nos plugins → 404 → la suite ne
+// s'exécute pas : fichiers écrits, plugin jamais rechargé, et une modale
+// « Mise à jour en cours » figée en travers de l'interface Steam. Mesuré le
+// 13/09 sur BC250-Toolkit.
+const UPDATE_POLL_MS = 5000;
+const UPDATE_POLL_TRIES = 36; // 3 min, le temps qu'un démarrage à froid finisse
+
+async function reportFailedUpdate() {
+  for (let i = 0; i < UPDATE_POLL_TRIES; i++) {
+    let notice: any = null;
+    try {
+      notice = await call<[], any>("take_pending_update");
+    } catch {
+      // Backend pas encore joignable : ce n'est pas un échec, on repasse.
+    }
+    if (notice?.version) {
+      notify({
+        title: "BoneCast",
+        body: `Update ${notice.version} could not be installed automatically. `
+            + "Install it from Decky → Developer → Install plugin from URL.",
+      });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, UPDATE_POLL_MS));
+  }
+}
+
+export default definePlugin(() => {
+  reportFailedUpdate();
+  return {
+    name: "BoneCast",
+    title: <div className={staticClasses.Title}>BoneCast</div>,
+    icon: <FaTwitch />,
+    content: <Content />,
+  };
+});

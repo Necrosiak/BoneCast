@@ -138,6 +138,47 @@ def _content_root(extracted: Path) -> Path:
     return extracted
 
 
+# Fichiers dont l'absence ne casse RIEN si on ne peut pas les écrire : de la
+# doc, une licence, des images, et plugin.json (que Decky garde root et qui ne
+# change qu'au nom/à l'auteur/aux flags). Tout le reste — le code — est vital :
+# sauter un .py, c'est livrer un plugin à moitié à jour, donc cassé.
+_SKIPPABLE_NAMES = {"LICENSE", "LICENSE.md", "NOTICE", "plugin.json"}
+_SKIPPABLE_SUFFIXES = {".md", ".txt", ".png", ".jpg", ".jpeg", ".svg", ".webp"}
+
+
+def _writable_as_us(dst: Path) -> bool:
+    """Peut-on écrire `dst` sans être root ?
+
+    Decky laisse le dossier de PREMIER NIVEAU et `plugin.json` à root, et chowne
+    tout le reste à l'utilisateur. Deux cas donc, et un seul est possible :
+    écraser un fichier qui existe déjà et nous appartient (droit sur le FICHIER)
+    fonctionne ; créer une nouvelle entrée exige le droit sur le DOSSIER, que
+    nous n'avons pas. Mesuré le 13/09 sur l'install réelle de BoneCast.
+    """
+    if dst.exists():
+        return os.access(dst, os.W_OK)
+    parent = dst.parent
+    while not parent.exists():
+        parent = parent.parent
+    return os.access(parent, os.W_OK)
+
+
+def _survey(root: Path, plugin_dir: Path):
+    """(bloquants, ignorables) — ce que cette mise à jour ne pourra pas écrire."""
+    hard, soft = [], []
+    for src in root.rglob("*"):
+        if src.is_dir():
+            continue
+        rel = src.relative_to(root)
+        dst = plugin_dir / rel
+        if _writable_as_us(dst):
+            continue
+        skippable = (dst.name in _SKIPPABLE_NAMES
+                     or dst.suffix.lower() in _SKIPPABLE_SUFFIXES)
+        (soft if skippable else hard).append(rel)
+    return hard, soft
+
+
 def _apply_blocking(url: str) -> None:
     plugin_dir = Path(DECKY_PLUGIN_DIR)
     with tempfile.TemporaryDirectory() as tmp:
@@ -152,13 +193,30 @@ def _apply_blocking(url: str) -> None:
             z.extractall(extract_dir)
 
         root = _content_root(extract_dir)
+
+        # Recenser AVANT d'écrire quoi que ce soit. L'ancienne boucle écrivait au
+        # fil de l'eau et levait au premier fichier impossible : le plugin
+        # restait à moitié mis à jour, moitié ancien code, moitié nouveau — bien
+        # pire que pas de mise à jour du tout.
+        hard, soft = _survey(root, plugin_dir)
+        if hard:
+            names = ", ".join(sorted(str(h) for h in hard)[:6])
+            raise PermissionError(
+                f"cette version touche des fichiers que le plugin ne peut pas "
+                f"écrire lui-même ({names}) — une install par Decky est requise")
+        if soft:
+            logger.info("[updater] ignorés (non essentiels, non inscriptibles) : "
+                        + ", ".join(sorted(str(x) for x in soft)))
+
         # Overlay-copy onto the plugin dir (don't wipe — keeps settings/runtime files).
+        skip = set(soft)
         for src in root.rglob("*"):
             rel = src.relative_to(root)
             dst = plugin_dir / rel
             if src.is_dir():
-                dst.mkdir(parents=True, exist_ok=True)
-            else:
+                if _writable_as_us(dst) or dst.exists():
+                    dst.mkdir(parents=True, exist_ok=True)
+            elif rel not in skip:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 _replace_file(src, dst)
 

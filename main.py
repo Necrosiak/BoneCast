@@ -76,6 +76,28 @@ except Exception as _e:                       # best-effort : le plugin survit s
     updater = None
 
 
+# Nombre de vérifications de release et délai entre deux. La vérif part quelques
+# secondes après le backend, c'est-à-dire souvent AVANT que le réseau soit
+# joignable : les journaux de la machine de test montrent trois démarrages sur
+# quatre qui meurent sur « Temporary failure in name resolution ». Rien ne
+# réessayait, donc le plugin restait sur sa version jusqu'au démarrage
+# suivant — qui échouait de la même façon.
+UPDATE_CHECK_TRIES = 10
+UPDATE_CHECK_DELAY_S = 30
+
+
+async def _recheck(updater):
+    """`updater.check()`, réessayé tant que c'est le réseau qui manque."""
+    from asyncio import sleep as _sleep
+    info = await updater.check()
+    for _ in range(UPDATE_CHECK_TRIES - 1):
+        if not info.get("error"):
+            break
+        await _sleep(UPDATE_CHECK_DELAY_S)
+        info = await updater.check()
+    return info
+
+
 class Plugin:
     # ── OAuth Twitch (device code flow, client public — pas de secret) ───────
     _TWITCH_CLIENT_ID = "idbnwqbkqyrzesxct1ztkejyf5aj6z"
@@ -1238,9 +1260,13 @@ class Plugin:
                 "record_path": cls._record_path if live else None,
                 "record_only": live and cls._record_only}
 
-    # ── Cycle de vie ─────────────────────────────────────────────────────────
-    @classmethod
     # ── Auto-update (release-based, comme le reste de la suite) ───────────────
+    # NB : il y avait ICI un `@classmethod` orphelin, resté d'un en-tête « Cycle
+    # de vie » dont la méthode a bougé, qui décorait _autoupdate_check DEUX fois.
+    # Le Python embarqué actuel l'accepte, mais l'enchaînement de classmethod est
+    # supprimé depuis Python 3.13 : le jour où Decky change de Python, la vérif
+    # de mise à jour lèverait « 'classmethod' object is not callable » au
+    # démarrage. Un seul décorateur.
     @classmethod
     async def _autoupdate_check(cls):
         """Vérif silencieuse au boot : si activé et qu'une release plus récente
@@ -1250,26 +1276,54 @@ class Plugin:
         try:
             if not updater.is_autoupdate_enabled():
                 return
-            info = await updater.check()
+            info = await _recheck(updater)
             if not info.get("update_available"):
                 return
             logger.info(f"[updater] {info['latest']} dispo (installé "
-                        f"{info['current']}) — application auto")
+                        f"{info['current']}) — application")
             # apply() renvoie un dict : {"ok": False, "error": …} est TOUJOURS
             # vrai, donc un échec passait pour un succès et le loader
             # redémarrait quand même — en boucle, puisque la version installée
             # n'avait pas bougé. On lit le champ, pas la vérité du dict.
+            # On applique NOUS-MÊMES. Le dossier du plugin appartient à root,
+            # mais tous les fichiers dedans nous appartiennent (sauf plugin.json)
+            # — mesuré le 13/09 : écraser un fichier existant passe, créer une
+            # entrée non. L'updater sait désormais faire le tri AVANT d'écrire.
+            #
+            # ⛔ Ne PAS déléguer à `utilities/install_plugin` : c'est la route du
+            # Store Decky, qui déclare l'install à plugins.deckbrew.xyz. Nos
+            # plugins n'y sont pas → 404 → la suite ne s'exécute pas : fichiers
+            # écrits, plugin jamais rechargé, et une modale figée en travers de
+            # l'interface Steam. Mesuré ici le 13/09.
             res = await updater.apply(info["url"])
             if res.get("ok"):
                 from asyncio import sleep as _sleep
                 logger.info("[updater] mise à jour installée — rechargement")
                 await _sleep(2)
                 updater.restart_loader()
-            else:
-                logger.error(f"[updater] mise à jour abandonnée : "
-                             f"{res.get('error', 'raison inconnue')}")
+                return
+            # Échec : le dire à l'utilisateur au lieu de le laisser sur une
+            # version périmée sans le savoir. Le frontend s'en charge, lui seul
+            # sait notifier.
+            logger.error(f"[updater] mise à jour impossible : "
+                         f"{res.get('error', 'raison inconnue')}")
+            cls._pending_update = {"version": info["latest"],
+                                   "error": res.get("error", "")}
         except Exception as e:
             logger.warning(f"[updater] auto-check: {e!r}")
+
+    # Avis d'échec déposé par _autoupdate_check, retiré par le frontend qui notifie.
+    _pending_update = None
+
+    @classmethod
+    async def take_pending_update(cls):
+        """Rend l'avis de mise à jour impossible au frontend, une seule fois.
+
+        Vidé à la lecture : la notification ne doit partir qu'UNE fois, pas à
+        chaque ouverture du QAM.
+        """
+        pending, cls._pending_update = cls._pending_update, None
+        return pending or {}
 
     @classmethod
     async def check_update(cls):
