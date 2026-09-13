@@ -1,6 +1,6 @@
 {
   "name": "bonecast",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "type": "module",
   "description": "Twitch in Steam Gaming Mode — streaming + transparent chat overlay",
   "scripts": {
@@ -13,7 +13,14 @@
     "type": "git",
     "url": "git+https://github.com/Necrosiak/BoneCast.git"
   },
-  "keywords": ["decky", "plugin", "twitch", "streaming", "steam-deck", "deck"],
+  "keywords": [
+    "decky",
+    "plugin",
+    "twitch",
+    "streaming",
+    "steam-deck",
+    "deck"
+  ],
   "author": "Necrosiak",
   "license": "BSD-3-Clause",
   "bugs": {
@@ -42,7 +49,10 @@
   },
   "pnpm": {
     "peerDependencyRules": {
-      "ignoreMissing": ["react", "react-dom"]
+      "ignoreMissing": [
+        "react",
+        "react-dom"
+      ]
     }
   }
 }
