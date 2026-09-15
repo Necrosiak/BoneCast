@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.7 — 2026-09-15
+
+### Notifications wait until you stop streaming
+
+A Steam notification that pops up while you are live ends up in the video:
+gamescope draws it over the game, and that is the picture BoneCast captures.
+The same goes for a local recording, where it would end up in the file.
+
+BoneCast now tells the other plugins when it is **streaming or recording**, and
+its own notifications are **held until you stop**. It follows the *Streamer
+mode* setting in [Steamcord](https://github.com/Necrosiak/Steamcord)
+(Automatic, Always on, Off): with Steamcord installed, Steamcord's notifications
+and the toasts of other Decky plugins are held too, and so are those of
+[SkullKey](https://github.com/Necrosiak/SkullKey) and
+[BC250 Toolkit](https://github.com/Necrosiak/bc250-toolkit-decky). Without
+Steamcord, BoneCast's own notifications still wait while it is live or recording.
+
 ## 0.3.6 — 2026-09-15
 
 ### Watch Twitch over your game
