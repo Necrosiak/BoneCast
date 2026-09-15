@@ -21,6 +21,9 @@ import { focusHalo, ActionCard, TWITCH, DANGER } from "./components/Styled";
 import { t } from "./i18n";
 
 const B = DialogButton as any;
+const EyeIcon = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none"
+  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+  aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" /><circle cx="12" cy="12" r="2.5" /></svg>;
 
 // Onglet de navigation (même idiome que Steamcord : texte blanc forcé + fond
 // piloté nous-mêmes, sinon le focus natif du DialogButton peint un fond clair
@@ -642,8 +645,201 @@ function ConfigSection() {
   );
 }
 
+// ── Onglet VISIONNAGE : lives Twitch au-dessus du jeu ───────────────────────
+function WatchSection() {
+  const [watch, setWatch] = useState<any>({ streams: [], layout: "corner_br", scale: 1,
+    opacity: 0.5, max_fps: 30, audio: "", volume: 1 });
+  const [input, setInput] = useState("");
+  const [watching, setWatching] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [followed, setFollowed] = useState<any[]>([]);
+  const [followedBusy, setFollowedBusy] = useState(true);
+  const [followedError, setFollowedError] = useState("");
+
+  const refreshFollowed = async () => {
+    setFollowedBusy(true); setFollowedError("");
+    try {
+      const r: any = await call("get_followed_live");
+      if (r?.ok) setFollowed(Array.isArray(r.streams) ? r.streams : []);
+      else setFollowedError(r?.error === "missing_follow_scope" ? t("watch_followed_reconnect")
+        : r?.error === "not_logged_in" ? t("watch_followed_login") : t("watch_followed_failed"));
+    } catch { setFollowedError(t("watch_followed_failed")); }
+    finally { setFollowedBusy(false); }
+  };
+
+  useEffect(() => {
+    call<[], any>("get_config").then((c: any) => {
+      if (c?.watch) setWatch((old: any) => ({ ...old, ...c.watch }));
+      setInput(Array.isArray(c?.watch?.streams) ? c.watch.streams.join(", ") : "");
+      setWatching(!!c?.watching);
+    }).catch(() => {});
+    refreshFollowed();
+  }, []);
+
+  const streamList = (value: string) => [...new Set(value.split(/[\s,]+/)
+    .map((v) => v.trim().replace(/^@/, "").toLowerCase())
+    .filter((v) => /^[a-z0-9_]{1,25}$/.test(v)))].slice(0, 4);
+  const push = (patch: any) => setWatch((old: any) => {
+    const next = { ...old, ...patch };
+    call("set_watch_settings", next).catch(() => {});
+    return next;
+  });
+  const saveStreams = async () => {
+    const streams = streamList(input);
+    const had = Array.isArray(watch.streams) && watch.streams.length > 0;
+    const audio = streams.includes(watch.audio) ? watch.audio : !had && streams.length ? streams[0] : "";
+    const next = { ...watch, streams, audio };
+    setWatch(next);
+    const r: any = await call("set_watch_settings", next);
+    if (!r?.ok) setMsg("⚠️ " + (r?.error || t("watch_save_failed")));
+    else setMsg(next.streams.length ? "" : t("watch_need_stream"));
+    return r;
+  };
+  const playFollowed = async (login: string) => {
+    const selected = streamList(input);
+    const next = selected.includes(login)
+      ? selected.filter((value) => value !== login)
+      : selected.length < 4 ? [...selected, login] : selected;
+    setInput(next.join(", "));
+    // Premier live lancé : son activé d'office (le user s'attend à l'entendre,
+    // la liste « Son » est tout en bas du QAM). Ensuite on respecte son choix.
+    const audio = next.includes(watch.audio) ? watch.audio
+      : !selected.length && next.length ? next[0] : "";
+    const nextWatch = { ...watch, streams: next, audio };
+    setWatch(nextWatch);
+    setBusy(true); setMsg("");
+    try {
+      const saved: any = await call("set_watch_settings", nextWatch);
+      if (!saved?.ok) { setMsg("⚠️ " + (saved?.error || t("watch_save_failed"))); return; }
+      if (!next.length && watching) {
+        await call("stop_watch"); setWatching(false); return;
+      }
+      if (next.length && !watching) {
+        const started: any = await call("start_watch");
+        if (started?.ok) setWatching(true);
+        else setMsg("⚠️ " + (started?.error || t("watch_start_failed")));
+      }
+    } finally { setBusy(false); }
+  };
+  const toggle = async () => {
+    setBusy(true); setMsg("");
+    try {
+      if (watching) {
+        await call("stop_watch"); setWatching(false);
+      } else {
+        const saved: any = await saveStreams();
+        if (!saved?.ok) return;
+        const r: any = await call("start_watch");
+        if (r?.ok) setWatching(true);
+        else setMsg(r?.error === "no_watch_stream" ? t("watch_need_stream")
+          : "⚠️ " + (r?.error || t("watch_start_failed")));
+      }
+    } finally { setBusy(false); }
+  };
+  const count = Array.isArray(watch.streams) ? watch.streams.length : 0;
+  // Un son qui pointe vers une chaîne retirée vaut « muet » : le helper ne
+  // joue que le son d'un flux affiché.
+  const audioOn = count > 0 && !!watch.audio && watch.streams.includes(watch.audio);
+  const layouts: any = {
+    1: [["corner_br", t("watch_corner")], ["corner_tr", t("watch_corner_top")],
+        ["corner_bl", t("watch_corner_left")], ["corner_tl", t("watch_corner_top_left")],
+        ["side_right", t("watch_side")], ["side_left", t("watch_side_left")], ["full", t("watch_full")]],
+    2: [["side_by_side", t("watch_side_by_side")], ["stacked", t("watch_stacked")],
+        ["stacked_left", t("watch_stacked_left")], ["pip", t("watch_pip")]],
+    3: [["one_plus_two", "1 + 2"], ["row", t("watch_row")], ["column", t("watch_column")], ["column_left", t("watch_column_left")]],
+    4: [["grid", t("watch_grid")], ["one_plus_three", "1 + 3"], ["row", t("watch_row")]],
+  };
+  return (
+    <PanelSection title={t("watch_title")}>
+      <PanelSectionRow><div style={{ fontSize: 11, opacity: 0.75 }}>
+        {t("watch_intro")}
+      </div></PanelSectionRow>
+      <PanelSectionRow><div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 700 }}>{t("watch_followed_title")}</div>
+        <ActionCard color={TWITCH} disabled={followedBusy} onClick={refreshFollowed}>
+          <IcRefresh /> {followedBusy ? "…" : t("watch_followed_refresh")}
+        </ActionCard>
+      </div></PanelSectionRow>
+      {followedError && <PanelSectionRow><div style={{ fontSize: 11, color: "#ffcc8a" }}>{followedError}</div></PanelSectionRow>}
+      {!followedBusy && !followedError && followed.length === 0 && <PanelSectionRow><div style={{ fontSize: 11, opacity: 0.7 }}>
+        {t("watch_followed_empty")}
+      </div></PanelSectionRow>}
+      {followed.map((live: any) => {
+        const selected = streamList(input).includes(live.login);
+        const full = !selected && streamList(input).length >= 4;
+        const detail = [live.game, live.title].filter(Boolean).join(" — ");
+        const thumbnail = String(live.thumbnail || "").replace("{width}", "160").replace("{height}", "90");
+        const viewers = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(Number(live.viewers) || 0);
+        return <PanelSectionRow key={live.login}>
+          <ActionCard color={TWITCH} active={selected} disabled={full} center={false}
+            onClick={() => playFollowed(live.login)}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, width: "100%", textAlign: "left" }}>
+              <div style={{ width: 82, height: 46, flex: "0 0 auto", position: "relative", overflow: "hidden", borderRadius: 3, background: "rgba(0,0,0,0.35)" }}>
+                {thumbnail && <img src={thumbnail} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover" }} />}
+                <span style={{ position: "absolute", left: 4, bottom: 3, padding: "1px 3px", borderRadius: 2, background: "#e91916", color: "#fff", fontSize: 8, fontWeight: 800, letterSpacing: 0.3 }}>LIVE</span>
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, fontWeight: 700 }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{live.name}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 2, opacity: 0.65, fontWeight: 400, fontSize: 10, whiteSpace: "nowrap" }}><EyeIcon /> {viewers}</span>
+                </div>
+                <div style={{ fontSize: 10, opacity: 0.65, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>@{live.login}{detail ? " · " + detail : ""}</div>
+              </div>
+            </div>
+          </ActionCard>
+        </PanelSectionRow>;
+      })}
+      <PanelSectionRow>
+        <TextField label={t("watch_channels")} value={input}
+          placeholder="channel1, channel2" onChange={(e: any) => setInput(e?.target?.value ?? "")}
+          onBlur={() => { saveStreams(); }} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ActionCard color={TWITCH} disabled={busy} onClick={toggle}>
+          <IcBroadcast /> {busy ? "…" : watching ? t("watch_stop") : t("watch_start")}
+        </ActionCard>
+      </PanelSectionRow>
+      {msg && <PanelSectionRow><div style={{ fontSize: 11, color: "#ffb4b4" }}>{msg}</div></PanelSectionRow>}
+      {count > 0 && <>
+        <PanelSectionRow>
+          <Dropdown strDefaultLabel={t("watch_layout")} selectedOption={watch.layout}
+            rgOptions={(layouts[count] || layouts[1]).map(([data, label]: any) => ({ data, label }))}
+            onChange={(e: any) => push({ layout: e.data })} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <SliderField label={t("watch_scale", { v: Math.round(watch.scale * 100) })}
+            value={watch.scale * 100} min={40} max={160} step={5} showValue={false}
+            onChange={(v: number) => push({ scale: v / 100 })} bottomSeparator="none" />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <SliderField label={t("watch_opacity", { v: Math.round(watch.opacity * 100) })}
+            value={watch.opacity * 100} min={15} max={100} step={5} showValue={false}
+            onChange={(v: number) => push({ opacity: v / 100 })} bottomSeparator="none" />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <Dropdown strDefaultLabel={t("watch_fps")} selectedOption={watch.max_fps}
+            rgOptions={[{ data: 30, label: "30 fps" }, { data: 60, label: "60 fps" }]}
+            onChange={(e: any) => push({ max_fps: e.data })} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <Dropdown strDefaultLabel={t("watch_audio")} selectedOption={audioOn ? watch.audio : ""}
+            rgOptions={[{ data: "", label: t("watch_audio_off") },
+              ...watch.streams.map((s: string) => ({ data: s, label: t("watch_audio_of", { v: s }) }))]}
+            onChange={(e: any) => push({ audio: e.data })} />
+        </PanelSectionRow>
+        {audioOn && <PanelSectionRow>
+          <SliderField label={t("watch_volume", { v: Math.round(watch.volume * 100) })}
+            value={watch.volume * 100} min={0} max={150} step={5} showValue={false}
+            onChange={(v: number) => push({ volume: v / 100 })} bottomSeparator="none" />
+        </PanelSectionRow>}
+      </>}
+    </PanelSection>
+  );
+}
+
 function Content() {
-  const [tab, setTab] = useState<"live" | "chat" | "config">("live");
+  const [tab, setTab] = useState<"live" | "watch" | "chat" | "config">("live");
   const [focus, setFocus] = useState<string | null>(null);
   return (
     <>
@@ -658,6 +854,12 @@ function Content() {
               onFocus={() => setFocus("live")}
               onBlur={() => setFocus((f: any) => (f === "live" ? null : f))}>
               <IcBroadcast /> {t("tab_live")}
+            </TabBtn>
+            <TabBtn active={tab === "watch"} focused={focus === "watch"}
+              onClick={() => setTab("watch")}
+              onFocus={() => setFocus("watch")}
+              onBlur={() => setFocus((f: any) => (f === "watch" ? null : f))}>
+              <IcBroadcast /> {t("tab_watch")}
             </TabBtn>
             <TabBtn active={tab === "chat"} focused={focus === "chat"}
               onClick={() => setTab("chat")}
@@ -675,6 +877,7 @@ function Content() {
         </PanelSectionRow>
       </PanelSection>
       {tab === "live" && <LiveSection />}
+      {tab === "watch" && <WatchSection />}
       {tab === "chat" && <ChatSection />}
       {tab === "config" && <ConfigSection />}
     </>

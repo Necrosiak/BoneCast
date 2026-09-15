@@ -5,7 +5,7 @@ import os
 import sys
 from json import load, dump
 from pathlib import Path
-from asyncio import create_task
+from asyncio import Lock, create_task
 from time import time
 
 from decky import logger, DECKY_PLUGIN_DIR  # type: ignore
@@ -101,19 +101,24 @@ async def _recheck(updater):
 class Plugin:
     # ── OAuth Twitch (device code flow, client public — pas de secret) ───────
     _TWITCH_CLIENT_ID = "idbnwqbkqyrzesxct1ztkejyf5aj6z"
-    # clips:edit = bouton « Clip » ; user:write:chat = envoi de messages chat.
+    # clips:edit = bouton « Clip » ; user:write:chat = envoi de messages chat ;
+    # user:read:follows = liste des chaînes suivies actuellement en direct.
     # Les logins existants n'ont PAS ces scopes → les endpoints renvoient 401 et
     # le front invite à se reconnecter (device flow re-demande tout).
     _TWITCH_SCOPES = ("channel:read:stream_key channel:manage:broadcast "
-                      "clips:edit user:write:chat")
+                      "clips:edit user:write:chat user:read:follows")
     _TWITCH_JUST_CHATTING = "509658"          # game_id « Just Chatting »
     _tw_device = None                          # état transitoire du device flow
     _overlay_proc = None
+    _watch_proc = None                          # helper GTK : lives Twitch par-dessus le jeu
+    _watch_start_lock = None                    # évite deux starts QAM simultanés
     _stream_proc = None                        # ffmpeg RTMP (live Twitch)
     _camera_feeder = None                      # gst_camera.py → /dev/video42
     _TWITCH_INGEST = "rtmp://ingest.global-contribute.live-video.net/app"
     _OVERLAY_DEFAULTS = {"opacity": 62, "fontSize": 13, "width": 360,
                          "height": 460, "pos": "tr", "badges": True, "thirdParty": True}
+    _WATCH_DEFAULTS = {"streams": [], "layout": "corner_br", "scale": 1.0,
+                       "opacity": 0.5, "max_fps": 30, "audio": "", "volume": 1.0}
     # ── Réglages du stream (par compte Steam) ────────────────────────────────
     _RES_PRESETS = {"720p": (1280, 720), "800p": (1280, 800),
                     "1080p": (1920, 1080), "source": (0, 0)}
@@ -181,6 +186,8 @@ class Plugin:
             "channel": cfg.get("channel") or oauth.get("login", ""),
             "overlay_on": ov is not None and ov.returncode is None,
             "overlay": {**cls._OVERLAY_DEFAULTS, **(cfg.get("overlay") or {})},
+            "watching": cls._watch_proc is not None and cls._watch_proc.returncode is None,
+            "watch": {**cls._WATCH_DEFAULTS, **(cfg.get("watch") or {})},
             "streaming": cls._stream_proc is not None
             and cls._stream_proc.returncode is None,
             "stream": {**cls._STREAM_DEFAULTS, **(cfg.get("stream") or {})},
@@ -330,6 +337,51 @@ class Plugin:
     @classmethod
     def _broadcaster_id(cls):
         return (cls._load_cfg().get("oauth") or {}).get("user_id", "")
+
+    @classmethod
+    async def get_followed_live(cls):
+        """Retourne les lives des chaînes suivies, rafraîchis à la demande.
+
+        L'endpoint Helix est paginé : on le parcourt entièrement plutôt que de
+        masquer les lives au-delà de la première centaine. Seules les données
+        utiles au QAM sont renvoyées, jamais le token OAuth.
+        """
+        cfg = cls._load_cfg()
+        oauth = cfg.get("oauth") or {}
+        if not oauth.get("access_token") or not oauth.get("user_id"):
+            return {"ok": False, "error": "not_logged_in"}
+        if "user:read:follows" not in (oauth.get("scopes") or []):
+            return {"ok": False, "error": "missing_follow_scope"}
+        lives, after = [], None
+        # Une limite haute protège le QAM d'une réponse anormalement paginée,
+        # tout en couvrant largement plus que les lives suivis usuels.
+        for _page in range(20):
+            params = {"user_id": oauth["user_id"], "first": 100}
+            if after:
+                params["after"] = after
+            status, body = await cls._api("GET", "streams/followed", params=params)
+            if status != 200:
+                logger.warning(f"[watch] followed lives failed: http {status} {body!r}")
+                if status in (401, 403):
+                    return {"ok": False, "error": "missing_follow_scope"}
+                return {"ok": False, "error": "followed_live_failed"}
+            for stream in (body or {}).get("data") or []:
+                login = str(stream.get("user_login") or "").lower()
+                if login:
+                    lives.append({
+                        "login": login,
+                        "name": stream.get("user_name") or login,
+                        "title": stream.get("title") or "",
+                        "game": stream.get("game_name") or "",
+                        "viewers": int(stream.get("viewer_count") or 0),
+                        # URL modèle Twitch ({width}×{height}), rendue par le
+                        # frontend à une taille légère adaptée au QAM.
+                        "thumbnail": stream.get("thumbnail_url") or "",
+                    })
+            after = ((body or {}).get("pagination") or {}).get("cursor")
+            if not after:
+                break
+        return {"ok": True, "streams": lives}
 
     @classmethod
     async def fetch_stream_key(cls):
@@ -545,6 +597,115 @@ class Plugin:
     async def get_overlay_status(cls):
         ov = cls._overlay_proc
         return {"overlay_on": ov is not None and ov.returncode is None}
+
+    # ── Visionnage Twitch : helper GTK/Cairo au-dessus de gamescope ─────────
+    @classmethod
+    def _watch_state_dir(cls):
+        """État sans secret, relu à chaud par watch_overlay.py."""
+        return os.path.expanduser("~/.local/share/bonecast/watch")
+
+    @classmethod
+    def _watch_settings(cls, cfg):
+        raw = {**cls._WATCH_DEFAULTS, **(cfg.get("watch") or {})}
+        # Les logins Twitch ne contiennent que lettres, chiffres et _. Cette
+        # validation évite d'écrire des valeurs surprenantes dans le helper.
+        import re
+        streams = []
+        for login in raw.get("streams") or []:
+            login = str(login).strip().lower().lstrip("@")
+            if re.fullmatch(r"[a-z0-9_]{1,25}", login) and login not in streams:
+                streams.append(login)
+            if len(streams) == 4:
+                break
+        return {
+            "streams": streams,
+            "layout": str(raw.get("layout") or "corner_br"),
+            "scale": max(0.4, min(1.6, float(raw.get("scale", 1.0)))),
+            "opacity": max(0.15, min(1.0, float(raw.get("opacity", 1.0)))),
+            "max_fps": 60 if int(raw.get("max_fps", 30)) >= 60 else 30,
+            "audio": str(raw.get("audio") or "").strip().lower().lstrip("@"),
+            "volume": max(0.0, min(2.0, float(raw.get("volume", 1.0)))),
+        }
+
+    @classmethod
+    def _write_watch_state(cls, cfg):
+        d = cls._watch_state_dir()
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, "state.json")
+        tmp = p + ".new"
+        with open(tmp, "w") as f:
+            dump(cls._watch_settings(cfg), f)
+        os.replace(tmp, p)  # le helper ne lit jamais un JSON à moitié écrit
+
+    @classmethod
+    async def set_watch_settings(cls, settings=None):
+        try:
+            cfg = cls._load_cfg()
+            watch = {**cls._WATCH_DEFAULTS, **(cfg.get("watch") or {})}
+            if isinstance(settings, dict):
+                for key in cls._WATCH_DEFAULTS:
+                    if key in settings:
+                        watch[key] = settings[key]
+            cfg["watch"] = watch
+            cls._save_cfg(cfg)
+            cls._write_watch_state(cfg)
+            return {"ok": True, "watch": cls._watch_settings(cfg)}
+        except Exception as e:
+            logger.warning(f"[watch] settings failed: {e!r}")
+            return {"ok": False, "error": str(e)}
+
+    @classmethod
+    async def start_watch(cls):
+        # Le frontend peut réémettre l'action avant que create_subprocess_exec
+        # ait renvoyé son PID. Sans verrou, les deux appels voient `_watch_proc`
+        # à None et créent deux fenêtres GTK superposées.
+        if cls._watch_start_lock is None:
+            cls._watch_start_lock = Lock()
+        async with cls._watch_start_lock:
+            cfg = cls._load_cfg()
+            watch = cls._watch_settings(cfg)
+            if not watch["streams"]:
+                return {"ok": False, "error": "no_watch_stream"}
+            if cls._watch_proc is not None and cls._watch_proc.returncode is None:
+                return {"ok": True, "already": True}
+            script = Path(DECKY_PLUGIN_DIR) / "watch_overlay.py"
+            if not script.exists():
+                script = Path(DECKY_PLUGIN_DIR) / "defaults" / "watch_overlay.py"
+            if not script.exists():
+                return {"ok": False, "error": "watch_helper_missing"}
+            cls._write_watch_state(cfg)
+            from asyncio import create_subprocess_exec
+            from subprocess import PIPE
+            try:
+                env = dict(bcenv.user_env())
+                env.update(bcenv.steam_display_env())
+                env.setdefault("DISPLAY", ":0")
+                cls._watch_proc = await create_subprocess_exec(
+                    sys_python(), str(script), "--state-dir", cls._watch_state_dir(),
+                    env=env, stdout=PIPE, stderr=PIPE)
+                create_task(stream_watcher(cls._watch_proc.stdout, prefix="[watch]"))
+                create_task(stream_watcher(cls._watch_proc.stderr, True, prefix="[watch]"))
+                logger.info(f"[watch] démarré : {', '.join(watch['streams'])}")
+                return {"ok": True}
+            except Exception as e:
+                logger.warning(f"[watch] start failed: {e!r}")
+                return {"ok": False, "error": str(e)}
+
+    @classmethod
+    async def stop_watch(cls):
+        proc = cls._watch_proc
+        cls._watch_proc = None
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.terminate()
+                from asyncio import wait_for
+                await wait_for(proc.wait(), timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        return {"ok": True}
 
     # ── Streaming Twitch (RTMP via ffmpeg depuis la capture /dev/video42) ─────
     # Le jeu est capturé dans le loopback v4l2 /dev/video42 par gst_camera.py
@@ -1374,6 +1535,11 @@ class Plugin:
         try:
             if cls._overlay_proc and cls._overlay_proc.returncode is None:
                 cls._overlay_proc.terminate()
+        except Exception:
+            pass
+        try:
+            if cls._watch_proc and cls._watch_proc.returncode is None:
+                cls._watch_proc.terminate()
         except Exception:
             pass
         try:

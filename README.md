@@ -20,6 +20,7 @@ BoneCast puts everything you need to stream to **Twitch** right in the Steam **Q
 - **Editable stream title** — set it from the plugin, changeable **even while live**.
 - **Automatic game category** — read from the running Steam game (works for non-Steam shortcuts too) and updated on the fly. Falls back to *Just Chatting* when a game has no matching Twitch category.
 - **Transparent chat overlay** — read-only Twitch chat drawn **over the game** in Gaming Mode (gamescope external-overlay plane), with native + **BTTV / 7TV / FFZ** emotes. Position, size and opacity are adjusted live from the QAM, and it stays visible even with Big Picture focused.
+- **📺 Watch Twitch over your game** — up to **four live streams** drawn over the game in Gaming Mode. Your **followed channels that are live** are listed with thumbnails and viewer counts: tap one and it plays. Layout, size, opacity and frame rate are set from the QAM; you pick **whose sound** you hear, with its own volume, always on your default audio output. *(Channels you follow need one Twitch reconnect after updating, to grant the new permission.)*
 - **🎬 Instant clips** — while live, one button clips the last ~30 seconds through the Twitch API; the clip lands on your dashboard about 15 seconds later.
 - **💬 Talk in your own chat** — send messages to your Twitch chat straight from the QAM, no keyboard-over-desktop gymnastics.
 - **⏸️ BRB mode** — one tap swaps the game feed for a clean pause screen and mutes your mic; one tap brings you back. The stream never drops.
