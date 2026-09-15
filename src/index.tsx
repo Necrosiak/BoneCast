@@ -109,7 +109,7 @@ function LiveSection() {
     setStreamBusy(true); setStreamMsg("");
     try {
       if (streaming) {
-        const r: any = await call("stop_stream"); setStreaming(false);
+        const r: any = await call("stop_stream"); setStreaming(false); setLiveSource("bonecast", false);
         setMicActive(false); setMicMuted(false); setBrb(false); setRecOnly(false);
         if (r?.record_path) setStreamMsg(t("recorded_to") + r.record_path);
       } else {
@@ -889,7 +889,30 @@ function Content() {
 // et font PLANTER le panneau de notifs Steam sur ce build — c'est le constat
 // déjà fait dans Steamcord, SkullKey et le Toolkit, où ce helper existe depuis
 // longtemps ; BoneCast était le seul à ne pas l'avoir.
+// Mode streamer — contrat PARTAGÉ avec Steamcord, SkullKey et BC250 Toolkit
+// (tous dans le même contexte JS de Steam) : window.__necroStreamer.sources =
+// { source: bool }, réglage localStorage « necro_streamer_mode » (auto | always
+// | off, réglable dans Steamcord), événement « necro-streamer-change ».
+// Pendant un live ou un enregistrement, un toast Steam s'imprime dans la vidéo
+// capturée : on le retient jusqu'à la fin.
+function setLiveSource(name: string, live: boolean) {
+  const w = window as any;
+  const g = (w.__necroStreamer ||= { sources: {} });
+  if (!!g.sources[name] === live) return;
+  g.sources[name] = live;
+  window.dispatchEvent(new Event("necro-streamer-change"));
+}
+function streamerActive(): boolean {
+  let mode = "auto";
+  try { mode = localStorage.getItem("necro_streamer_mode") || "auto"; } catch {}
+  if (mode === "off") return false;
+  if (mode === "always") return true;
+  return Object.values((window as any).__necroStreamer?.sources || {}).some(Boolean);
+}
+const STREAMER_RETRY_MS = 15000;
+
 function notify(data: { title?: string; body: string; duration?: number }) {
+  if (streamerActive()) { setTimeout(() => notify(data), STREAMER_RETRY_MS); return; }
   try {
     const App = (window as any).App;
     const steamid = App?.GetCurrentUser?.()?.strSteamID || App?.m_CurrentUser?.strSteamID || "";
@@ -940,10 +963,17 @@ async function reportFailedUpdate() {
 
 export default definePlugin(() => {
   reportFailedUpdate();
+  // Mode streamer : un stream OU un enregistrement BoneCast est une source de
+  // live — le toast finirait aussi dans le fichier enregistré.
+  const pollLive = () => call<[], any>("get_stream_status")
+    .then((st: any) => setLiveSource("bonecast", !!st?.streaming)).catch(() => {});
+  pollLive();
+  const liveTimer = setInterval(pollLive, 5000);
   return {
     name: "BoneCast",
     title: <div className={staticClasses.Title}>BoneCast</div>,
     icon: <FaTwitch />,
     content: <Content />,
+    onDismount() { clearInterval(liveTimer); setLiveSource("bonecast", false); },
   };
 });
