@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.3.6 — 2026-09-15
+
+### Watch Twitch over your game
+
+A new **Watch** tab plays up to **four live streams on top of the game** in
+Gaming Mode.
+
+- **Followed channels that are live** are listed with a thumbnail, a LIVE badge,
+  the viewer count and what they are playing. Tap a card and it plays; tap it
+  again to remove it. Channels can also be typed in by name.
+- **Layouts** for one to four streams — corners, left or right side, stacked,
+  column, grid, picture-in-picture, full screen — plus size, opacity (50 % by
+  default) and a 30 or 60 fps cap. Moving a stream no longer leaves a frozen
+  copy of it behind, and nothing is drawn under the Steam bars.
+- **Sound**: pick whose sound you hear. The first stream you start is heard
+  right away; after that your choice is kept. The volume slider (0–150 %)
+  changes the level **without cutting the sound**, and the sound comes back on
+  its own after a reconnect or a resize — before, it stayed silent until the
+  next setting change.
+- The sound always goes to your **default audio output**, and follows it if you
+  switch outputs while watching. WirePlumber remembers the output of an app
+  whose stream was once moved by hand and would have sent every later stream
+  there; BoneCast's watch audio opts out of that.
+- Stream quality follows the size on screen: a thumbnail does not decode
+  1080p.
+
+**Reconnect to Twitch once** after updating if you want the followed-channels
+list: it needs a new permission (`user:read:follows`) that existing logins do
+not have. Everything else works without it.
+
+Sound and picture are read over two separate connections; they have looked in
+sync in testing, but that has not been measured.
+
 ## 0.3.5 — 2026-09-13
 
 ### Updates no longer stop at the first thing they cannot write, or at DNS
