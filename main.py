@@ -716,17 +716,13 @@ class Plugin:
     @classmethod
     def _gst_environment(cls):
         """Env pour gst_camera.py : user_env (bus/affichage user + purge des LD_*
-        PyInstaller) + GST_PLUGIN_PATH embarqué (libgstnice) + VAAPI radeonsi."""
+        PyInstaller) + VAAPI radeonsi."""
         try:
             env = dict(bcenv.user_env())
         except Exception:
             env = dict(os.environ)
-        gpd = str(Path(DECKY_PLUGIN_DIR) / "gst-plugins")
-        if not os.path.isdir(gpd):
-            gpd = str(Path(DECKY_PLUGIN_DIR) / "defaults" / "gst-plugins")
         env["GST_VAAPI_ALL_DRIVERS"] = "1"
         env["LIBVA_DRIVER_NAME"] = "radeonsi"
-        env["GST_PLUGIN_PATH"] = gpd + os.pathsep + env.get("GST_PLUGIN_PATH", "")
         return env
 
     @classmethod
