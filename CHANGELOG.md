@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.8 — unreleased
+
+### Updates that installed but never loaded
+
+Installing an update wrote the new files and stopped there: the plugin reload
+that should follow could never happen, so the update only took effect at the
+next boot — with nothing said about it either way. Two measured reasons: Decky's
+loader is a PyInstaller bundle, so every plugin backend inherits its library path
+and `systemctl` cannot even start from one; and restarting a system service is
+refused to a plugin that does not run as root. Nothing read the result.
+
+The update button now asks the loader — which does run as root — to reload this
+plugin alone, and reports the new version when it is done. Automatic updates say
+the update takes effect the next time Steam starts, instead of claiming a reload
+that never came.
+
+Found through [Steamcord #52](https://github.com/Necrosiak/Steamcord/issues/52),
+reported by [@bastiHST90](https://github.com/bastiHST90); the same defect was in
+this plugin.
+
+### Unload
+
+The microphone state was only restored after the audio bridge had been torn
+down — an await that never resumes during an unload, so it was skipped whenever
+the bridge lingered. It now happens first.
+
 ## 0.3.7 — 2026-09-15
 
 ### Notifications wait until you stop streaming

@@ -1455,9 +1455,20 @@ class Plugin:
             res = await updater.apply(info["url"])
             if res.get("ok"):
                 from asyncio import sleep as _sleep
-                logger.info("[updater] mise à jour installée — rechargement")
                 await _sleep(2)
-                updater.restart_loader()
+                if updater.restart_loader():
+                    logger.info("[updater] mise à jour installée — rechargement")
+                    return
+                # Le redémarrage du loader est REFUSÉ à tout plugin non root :
+                # polkit demande une authentification que personne ne peut
+                # donner ici (mesuré le 22/09). Le journal disait pourtant
+                # « rechargement » — d'où des machines qui restaient sur
+                # l'ancienne version sans que rien ne le signale.
+                logger.info(
+                    f"[updater] {info['latest']} écrite sur le disque ; rechargement "
+                    "refusé (plugin non root) — active au prochain démarrage de Steam"
+                )
+                cls._pending_update = {"version": info["latest"], "reload": True}
                 return
             # Échec : le dire à l'utilisateur au lieu de le laisser sur une
             # version périmée sans le savoir. Le frontend s'en charge, lui seul
@@ -1497,10 +1508,10 @@ class Plugin:
         if not updater:
             return {"ok": False, "error": "updater unavailable"}
         res = await updater.apply(url)
-        if res.get("ok"):
-            from asyncio import sleep as _sleep
-            await _sleep(1)
-            updater.restart_loader()
+        # Écrire ne suffit pas, il faut RECHARGER : c'est le frontend qui s'en
+        # charge, en demandant au loader de réimporter CE plugin. On ne redémarre
+        # plus plugin_loader d'ici — le backend n'en a pas le droit (voir
+        # restart_loader) et ça relancerait tous les plugins pour rien.
         return res
 
     @classmethod
@@ -1538,9 +1549,14 @@ class Plugin:
                 cls._watch_proc.terminate()
         except Exception:
             pass
+        # ⚠️ Ordre voulu : tout ce qui est synchrone AVANT la moindre attente.
+        # Pendant un déchargement, Decky ne redonne pas la main après une
+        # suspension réelle — mesuré sur Steamcord le 22/09 : la suite ne
+        # s'exécute jamais et le loader SIGKILL 5 s plus tard. `_reset_mic_state`
+        # passait donc à la trappe dès que le pont audio traînait.
+        cls._reset_mic_state()
+        logger.info("BoneCast backend déchargé")
         try:
             await cls._audio_bridge_stop()       # défait le pont audio Discord
         except Exception:
             pass
-        cls._reset_mic_state()
-        logger.info("BoneCast backend déchargé")

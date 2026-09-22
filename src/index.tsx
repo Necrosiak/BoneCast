@@ -536,7 +536,7 @@ function StreamSettings() {
 function UpdaterSection() {
   const [auto, setAuto] = useState(true);
   const [status, setStatus] = useState<
-    "idle" | "checking" | "available" | "uptodate" | "installing" | "failed">("idle");
+    "idle" | "checking" | "available" | "uptodate" | "installing" | "failed" | "needsrestart">("idle");
   const [updErr, setUpdErr] = useState("");
   const [latest, setLatest] = useState("");
   const [current, setCurrent] = useState("");
@@ -562,7 +562,33 @@ function UpdaterSection() {
     // Échec → {ok:false, error} : on l'affiche au lieu de rester sur « Installation… ».
     try {
       const r: any = await call<[string], any>("apply_update", url);
-      if (!(r === true || r?.ok)) { setUpdErr(r?.error || ""); setStatus("failed"); }
+      if (!(r === true || r?.ok)) { setUpdErr(r?.error || ""); setStatus("failed"); return; }
+      // Les fichiers sont écrits — mais rien n'est chargé pour autant : le
+      // backend ne peut pas redémarrer plugin_loader (mesuré le 22/09 : les
+      // bibliothèques du bundle PyInstaller du loader, léguées à nos backends,
+      // empêchent `systemctl` de démarrer ; et sans elles, polkit refuse
+      // l'unité système à un plugin non root). Le loader, LUI, est root : sa route interne
+      // loader/reload_plugin arrête le backend, le réimporte depuis les
+      // fichiers neufs et fait recharger dist/index.js au frontend. Ce n'est
+      // PAS utilities/install_plugin, la route du Store, qui se perd sur un
+      // 404 deckbrew et laisse une modale figée (13/09).
+      const backend: any = (window as any).DeckyBackend;
+      if (backend?.call) {
+        try {
+          await backend.call("loader/reload_plugin", "BoneCast");
+            // Le panneau à l'écran n'est PAS remonté par le rechargement : Steam
+            // garde l'arbre React déjà monté, et il restait donc figé sur
+            // « Installation… » — vu à l'écran le 22/09, alors même que le
+            // plugin venait d'être réimporté des deux côtés. C'est très
+            // exactement le « je clique et il ne se passe rien » de #52, donc on
+            // finit le parcours nous-mêmes. Le nouveau code sert dès la
+            // prochaine ouverture du menu.
+          setCurrent(latest);
+          setStatus("uptodate");
+          return;
+        } catch { /* Decky trop ancien : route absente */ }
+      }
+      setStatus("needsrestart");
     } catch { setStatus("failed"); }
   };
   const onToggle = (v: boolean) => {
@@ -575,6 +601,7 @@ function UpdaterSection() {
     : status === "available" ? t("upd_install", { v: latest })
     : status === "uptodate" ? t("upd_uptodate", { v: current })
     : status === "failed" ? t("upd_failed")
+    : status === "needsrestart" ? t("upd_needs_restart")
     : t("upd_check");
 
   return (
@@ -952,7 +979,13 @@ async function reportFailedUpdate() {
     if (notice?.version) {
       notify({
         title: "BoneCast",
-        body: `Update ${notice.version} could not be installed automatically. `
+        // Deux avis distincts : la maj n'a pas pu s'écrire (il faut la poser à
+        // la main), ou elle est écrite mais pas chargée — le backend n'a pas le
+        // droit de redémarrer le loader, donc elle prendra effet au prochain
+        // démarrage de Steam. Annoncer le second comme un échec serait faux.
+        body: notice.reload
+          ? `Update ${notice.version} installed — it becomes active the next time Steam starts.`
+          : `Update ${notice.version} could not be installed automatically. `
             + "Install it from Decky → Developer → Install plugin from URL.",
       });
       return;
