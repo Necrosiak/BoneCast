@@ -90,4 +90,10 @@ Criado e mantido por **Necrosiak**. Faz parte da suíte de plugins Necrosiak par
 
 ## Aviso sobre IA
 
-Foi usada IA na criação deste projeto: para engenharia reversa, desenvolvimento e documentação. **Não** foi usada para arte nem escrita criativa. Tudo o que é publicado é revisto por um humano, e o resultado é da minha responsabilidade. Se isso o incomoda, fica avisado.
+Foi usada IA (Claude da Anthropic e Codex da OpenAI) na criação deste projeto: para engenharia reversa, desenvolvimento e documentação. **Não** foi usada para arte nem escrita criativa. Tudo o que é publicado é revisto por um humano, e o resultado é da minha responsabilidade. Se isso o incomoda, fica avisado.
+
+## Apoie o desenvolvimento
+
+Se este projeto é útil para si, pode apoiar o seu desenvolvimento contínuo no [Ko-fi](https://ko-fi.com/nekyron).
+
+[![Apoie-me no Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/nekyron)

@@ -90,4 +90,10 @@ Gemaakt en onderhouden door **Necrosiak**. Onderdeel van de Necrosiak-pluginsuit
 
 ## AI-vermelding
 
-Bij het maken van dit project is AI gebruikt — voor reverse engineering, ontwikkeling en documentatie. **Niet** voor beeld of creatief schrijven. Alles wat wordt gepubliceerd is door een mens nagekeken, en het resultaat blijft mijn verantwoordelijkheid. Als je daar moeite mee hebt, weet je het nu.
+Bij het maken van dit project is AI (Claude van Anthropic en Codex van OpenAI) gebruikt — voor reverse engineering, ontwikkeling en documentatie. **Niet** voor beeld of creatief schrijven. Alles wat wordt gepubliceerd is door een mens nagekeken, en het resultaat blijft mijn verantwoordelijkheid. Als je daar moeite mee hebt, weet je het nu.
+
+## Steun de ontwikkeling
+
+Als dit project nuttig voor je is, kun je de verdere ontwikkeling steunen via [Ko-fi](https://ko-fi.com/nekyron).
+
+[![Steun mij op Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/nekyron)

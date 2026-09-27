@@ -90,4 +90,10 @@ Erstellt und gepflegt von **Necrosiak**. Teil der Necrosiak-Plugin-Suite für de
 
 ## KI-Hinweis
 
-Bei der Entwicklung dieses Projekts wurde KI eingesetzt — für Reverse Engineering, Entwicklung und Dokumentation. **Nicht** für Grafik oder kreatives Schreiben. Alles Veröffentlichte wird von einem Menschen geprüft, und ich stehe für das Ergebnis gerade. Wer damit nicht einverstanden ist, weiß nun Bescheid.
+Bei der Entwicklung dieses Projekts wurde KI (Claude von Anthropic und Codex von OpenAI) eingesetzt — für Reverse Engineering, Entwicklung und Dokumentation. **Nicht** für Grafik oder kreatives Schreiben. Alles Veröffentlichte wird von einem Menschen geprüft, und ich stehe für das Ergebnis gerade. Wer damit nicht einverstanden ist, weiß nun Bescheid.
+
+## Entwicklung unterstützen
+
+Wenn dir dieses Projekt hilft, kannst du seine weitere Entwicklung auf [Ko-fi](https://ko-fi.com/nekyron) unterstützen.
+
+[![Unterstütze mich auf Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/nekyron)

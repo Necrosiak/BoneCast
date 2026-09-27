@@ -536,7 +536,7 @@ function StreamSettings() {
 function UpdaterSection() {
   const [auto, setAuto] = useState(true);
   const [status, setStatus] = useState<
-    "idle" | "checking" | "available" | "uptodate" | "installing" | "failed" | "needsrestart">("idle");
+    "idle" | "checking" | "available" | "uptodate" | "updated" | "installing" | "failed" | "needsrestart">("idle");
   const [updErr, setUpdErr] = useState("");
   const [latest, setLatest] = useState("");
   const [current, setCurrent] = useState("");
@@ -583,8 +583,11 @@ function UpdaterSection() {
             // exactement le « je clique et il ne se passe rien » de #52, donc on
             // finit le parcours nous-mêmes. Le nouveau code sert dès la
             // prochaine ouverture du menu.
+            // Finir sur « À jour (x) » ne se distinguait pas d'un clic resté
+            // sans effet (Steamcord #52, 24/09) : un état à part dit que ça a
+            // marché, et quoi faire.
           setCurrent(latest);
-          setStatus("uptodate");
+          setStatus("updated");
           return;
         } catch { /* Decky trop ancien : route absente */ }
       }
@@ -600,6 +603,7 @@ function UpdaterSection() {
     : status === "installing" ? t("upd_installing")
     : status === "available" ? t("upd_install", { v: latest })
     : status === "uptodate" ? t("upd_uptodate", { v: current })
+    : status === "updated" ? t("upd_done", { v: current })
     : status === "failed" ? t("upd_failed")
     : status === "needsrestart" ? t("upd_needs_restart")
     : t("upd_check");
@@ -616,6 +620,11 @@ function UpdaterSection() {
           <IcRefresh /> {label}
         </ActionCard>
       </PanelSectionRow>
+      {status === "updated" ? (
+        <PanelSectionRow>
+          <div style={{ fontSize: 11, color: "#23a55a", lineHeight: 1.35 }}>{t("upd_done_note", { v: current })}</div>
+        </PanelSectionRow>
+      ) : null}
       {status === "failed" && updErr ? (
         <PanelSectionRow>
           <div style={{ fontSize: 11, opacity: 0.8, wordBreak: "break-word" }}>{updErr}</div>
