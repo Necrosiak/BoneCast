@@ -1,6 +1,6 @@
 # BoneCast 🦴📡
 
-**Twitch in Steam Gaming Mode** — a [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for Steam Deck / Bazzite / SteamOS.
+**Twitch and YouTube in Steam Gaming Mode** — a [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for Steam Deck / Bazzite / SteamOS.
 
 🌍 **Languages:** **English** · [Français](docs/README.fr.md) · [Deutsch](docs/README.de.md) · [Español](docs/README.es.md) · [Italiano](docs/README.it.md) · [Português](docs/README.pt.md) · [Nederlands](docs/README.nl.md) · [Polski](docs/README.pl.md) · [Русский](docs/README.ru.md)
 
@@ -16,6 +16,7 @@
 BoneCast puts everything you need to stream to **Twitch** right in the Steam **Quick Access Menu** — no desktop, no keyboard, gamepad-friendly from login to going live.
 
 - **One Twitch login** *(device code — gamepad friendly)*: you enter a short code on `twitch.tv/activate`, and BoneCast fetches your **stream key automatically**. No manual copy-paste, ever.
+- **▶️ YouTube tab** *(new in 0.4.0)* — go live on YouTube with your stream key, with its **own stream settings** (resolution, bitrate, encoder, mic, Discord audio, recording), BRB and live mic mute, plus a **YouTube chat overlay** over the game, no account needed. Only one live and one chat overlay at a time: Twitch and YouTube never run together. *Logging in with your YouTube account is coming next.*
 - **Go live from the QAM** — one button starts and stops the RTMP stream. A **● LIVE** badge shows while you're broadcasting.
 - **Editable stream title** — set it from the plugin, changeable **even while live**.
 - **Automatic game category** — read from the running Steam game (works for non-Steam shortcuts too) and updated on the fly. Falls back to *Just Chatting* when a game has no matching Twitch category.

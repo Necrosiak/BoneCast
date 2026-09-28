@@ -12,12 +12,12 @@ import {
   Router,
 } from "@decky/ui";
 import { definePlugin, call } from "@decky/api";
-import { FaTwitch } from "react-icons/fa";
+import { FaTwitch, FaYoutube } from "react-icons/fa";
 import {
-  IcBroadcast, IcChat, IcController, IcFilm, IcGithub, IcKey,
+  BoneCastIcon, IcBroadcast, IcChat, IcController, IcFilm, IcGear, IcGithub, IcKey, IcSliders,
   IcLogout, IcMic, IcMicMute, IcRefresh, IcSave, IcSend,
 } from "./components/Icons";
-import { focusHalo, ActionCard, TWITCH, DANGER } from "./components/Styled";
+import { focusHalo, ActionCard, TWITCH, YOUTUBE, DANGER } from "./components/Styled";
 import { t } from "./i18n";
 
 const B = DialogButton as any;
@@ -25,27 +25,50 @@ const EyeIcon = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none
   stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
   aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" /><circle cx="12" cy="12" r="2.5" /></svg>;
 
-// Onglet de navigation (même idiome que Steamcord : texte blanc forcé + fond
-// piloté nous-mêmes, sinon le focus natif du DialogButton peint un fond clair
-// sous notre texte blanc = illisible).
-const TabBtn = ({ active, focused, onClick, onFocus, onBlur, children }: any) => (
-  <B
-    onClick={onClick}
-    onFocus={onFocus} onBlur={onBlur}
-    onGamepadFocus={onFocus} onGamepadBlur={onBlur}
+// Onglets : même habillage que Steamcord (#43 là-bas : des boutons alignés ne
+// disaient pas qu'ils étaient exclusifs). Coins arrondis en haut seulement,
+// actif SOULIGNÉ d'un trait d'accent qui rejoint la règle sous la rangée,
+// inactifs éteints. Le soulignement est un boxShadow interne : on le compose à
+// la main avec l'anneau de focus au lieu de laisser focusHalo l'écraser. Texte
+// blanc forcé, sinon le focus natif du DialogButton peint un fond clair dessous.
+const TabBtn = ({ active, focused, onClick, onFocus, onBlur, children, color = TWITCH }: any) => {
+  const shadow = [
+    active ? `inset 0 -3px 0 ${color}` : "",
+    focused ? `0 0 0 2px #fff, 0 0 8px 1px ${color}` : "",
+  ].filter(Boolean).join(", ") || "none";
+  return (
+    <B noFocusRing
+      onClick={onClick}
+      onFocus={onFocus} onBlur={onBlur}
+      onGamepadFocus={onFocus} onGamepadBlur={onBlur}
+      style={{
+        flex: "1 1 0", minWidth: 0, margin: 0, padding: "8px 0",
+        fontSize: 13, minHeight: 40, boxSizing: "border-box",
+        overflow: "visible", lineHeight: 1.2,
+        borderRadius: "6px 6px 0 0",
+        color: active || focused ? "#fff" : "rgba(255,255,255,0.62)",
+        background: focused ? color + "d9"
+          : active ? color + "47" : "rgba(255,255,255,0.04)",
+        fontWeight: active ? 700 : 400,
+        ...focusHalo(color, focused),
+        boxShadow: shadow,
+      }}
+    >
+      {children}
+    </B>
+  );
+};
+
+// Rangée d'onglets = UN arrêt de nav vertical (gauche/droite circule entre les
+// onglets), fermée par une règle que le soulignement de l'actif vient couper.
+const TabRow = ({ children }: any) => (
+  <Focusable flow-children="row"
     style={{
-      flex: "1 1 0", minWidth: 0, margin: 0, padding: "4px 0",
-      fontSize: 12, minHeight: 0, boxSizing: "border-box",
-      color: "#fff",
-      background: focused
-        ? "rgba(145,70,255,0.85)"
-        : active ? "rgba(145,70,255,0.35)" : "rgba(255,255,255,0.06)",
-      fontWeight: active ? 700 : 400,
-      ...focusHalo(TWITCH, focused),
-    }}
-  >
+      display: "flex", gap: 4, marginBottom: 6, width: "100%", boxSizing: "border-box",
+      borderBottom: "1px solid rgba(255,255,255,0.14)",
+    }}>
     {children}
-  </B>
+  </Focusable>
 );
 
 // ── Onglet LIVE : login OAuth + titre + go live + BRB/clip/micro ─────────────
@@ -61,120 +84,15 @@ function LiveSection() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authCode, setAuthCode] = useState("");
   const [authMsg, setAuthMsg] = useState("");
-  // streaming (live Twitch)
-  const [streaming, setStreaming] = useState(false);
-  const [streamBusy, setStreamBusy] = useState(false);
-  const [streamMsg, setStreamMsg] = useState("");
-  // mute micro à la volée (n'affecte que le stream, pas le vocal Discord)
-  const [micActive, setMicActive] = useState(false);
-  const [micMuted, setMicMuted] = useState(false);
-  const [stMic, setStMic] = useState(false);   // réglage « micro dans le stream »
-
-  const [brb, setBrb] = useState(false);
-  const [brbBusy, setBrbBusy] = useState(false);
-  const [clipBusy, setClipBusy] = useState(false);
-  const [recOnly, setRecOnly] = useState(false);
-
   const refresh = () =>
     call<[], any>("get_config").then((c: any) => {
       setLoggedIn(!!c?.logged_in); setLogin(c?.login || "");
       setKeySet(!!c?.key_set);
-      setStreaming(!!c?.streaming);
       if (typeof c?.title === "string") setTitle(c.title);
       if (typeof c?.game_name === "string") setGameName(c.game_name);
-      setStMic(!!c?.stream?.mic);
     }).catch(() => {});
 
   useEffect(() => { refresh(); }, []);
-
-  // Tant qu'on est en live, surveille que ffmpeg n'a pas planté (reflète l'arrêt).
-  useEffect(() => {
-    if (!streaming) return;
-    const id = setInterval(async () => {
-      try {
-        const r: any = await call("get_stream_status");
-        if (!r?.streaming) {
-          setStreaming(false); setStreamMsg(t("live_stopped"));
-          setMicActive(false); setMicMuted(false); setBrb(false); setRecOnly(false);
-        } else {
-          setMicActive(!!r?.mic); setMicMuted(!!r?.mic_muted);
-          setBrb(!!r?.brb); setRecOnly(!!r?.record_only);
-        }
-      } catch { /* on continue */ }
-    }, 4000);
-    return () => clearInterval(id);
-  }, [streaming]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const toggleLive = async () => {
-    setStreamBusy(true); setStreamMsg("");
-    try {
-      if (streaming) {
-        const r: any = await call("stop_stream"); setStreaming(false); setLiveSource("bonecast", false);
-        setMicActive(false); setMicMuted(false); setBrb(false); setRecOnly(false);
-        if (r?.record_path) setStreamMsg(t("recorded_to") + r.record_path);
-      } else {
-        // Catégorie Twitch auto = jeu en cours (Steam OU raccourci non-Steam).
-        try {
-          const gn = (Router as any)?.MainRunningApp?.display_name;
-          if (gn) { setGameName(gn); await call<[string], any>("set_game", gn); }
-        } catch { /* pas de jeu détecté → on garde la catégorie précédente */ }
-        const r: any = await call("start_stream");
-        if (r?.ok) {
-          setStreaming(true); setStreamMsg("");
-          setMicActive(stMic); setMicMuted(false);
-        }
-        else setStreamMsg(
-          r?.error === "no_key" ? t("err_no_key")
-          // stand-alone : le backend fournit la commande exacte pour CET OS
-          : r?.error === "no_loopback" ? "⚠️ " + (r?.hint || t("hint_no_loopback"))
-          : r?.error === "no_ffmpeg" ? "⚠️ " + (r?.hint || t("hint_no_ffmpeg"))
-          : r?.error === "no_x264" ? "⚠️ " + (r?.hint || t("hint_no_x264"))
-          : r?.error === "no_gst" ? "⚠️ " + (r?.hint || t("hint_no_gst"))
-          : "⚠️ " + (r?.hint || r?.error || t("err_live_failed")));
-      }
-    } finally { setStreamBusy(false); }
-  };
-
-  // Enregistrement local SANS passer en live (mkv dans Vidéos/BoneCast).
-  const startRecordOnly = async () => {
-    setStreamBusy(true); setStreamMsg("");
-    try {
-      const r: any = await call<[boolean], any>("start_stream", true);
-      if (r?.ok) { setStreaming(true); setRecOnly(true); setMicActive(stMic); }
-      else setStreamMsg("⚠️ " + (r?.hint || r?.error || t("err_record_failed")));
-    } finally { setStreamBusy(false); }
-  };
-
-  // BRB : écran pause à l'antenne (le live continue, micro auto-coupé).
-  const toggleBrb = async () => {
-    setBrbBusy(true);
-    try {
-      const r: any = await call(brb ? "brb_stop" : "brb_start");
-      if (r?.ok) setBrb(!brb);
-    } finally { setBrbBusy(false); }
-  };
-
-  // Clip des ~30 dernières secondes (Twitch met ~15 s à le publier).
-  const doClip = async () => {
-    setClipBusy(true);
-    try {
-      const r: any = await call("create_clip");
-      setStreamMsg(r?.ok ? t("clip_created")
-        : r?.error === "missing_scope" ? t("reconnect_scopes")
-        : r?.error === "not_live" ? t("clip_not_live")
-        : "⚠️ " + (r?.error || t("err_clip_failed")));
-    } finally { setClipBusy(false); }
-  };
-
-  // Coupe/rétablit le micro sur le stream (n'affecte pas le vocal Discord).
-  const toggleMicMute = async () => {
-    const next = !micMuted;
-    setMicMuted(next);                        // optimiste
-    try {
-      const r: any = await call<[boolean], any>("set_mic_mute", next);
-      if (typeof r?.muted === "boolean") setMicMuted(r.muted);
-    } catch { setMicMuted(!next); }           // rollback si échec
-  };
 
   // Poll le backend tant qu'on attend l'autorisation Twitch (device flow).
   useEffect(() => {
@@ -255,55 +173,14 @@ function LiveSection() {
           <IcController /> {t("category_auto")}{gameName ? ` : ${gameName}` : " " + t("category_detect")}
         </div>
       </PanelSectionRow>
-      <PanelSectionRow>
-        <ActionCard color={streaming ? DANGER : TWITCH} active big
-          disabled={streamBusy || !keySet} onClick={toggleLive}>
-          {streamBusy ? "…" : <><IcBroadcast /> {streaming ? t("stop_live") : t("go_live")}</>}
-        </ActionCard>
-      </PanelSectionRow>
-      {!streaming && (
-        <PanelSectionRow>
-          <ActionCard color={TWITCH} disabled={streamBusy} onClick={startRecordOnly}>
-            {t("record_only_btn")}
-          </ActionCard>
-        </PanelSectionRow>
-      )}
-      {streaming && (
-        <PanelSectionRow>
-          <div style={{ fontSize: 12, fontWeight: 800, color: DANGER, textAlign: "center" }}>
-            {recOnly ? t("status_rec")
-             : brb ? t("status_brb")
-             : t("status_live")}
-          </div>
-        </PanelSectionRow>
-      )}
-      {streaming && (
-        <PanelSectionRow>
-          <Focusable flow-children="row" style={{ display: "flex", gap: 6, width: "100%" }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <ActionCard color={brb ? DANGER : TWITCH} active={brb}
-                disabled={brbBusy} onClick={toggleBrb}>
-                {brb ? t("brb_back") : t("brb_pause")}
-              </ActionCard>
-            </div>
-            {!recOnly && (
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <ActionCard color={TWITCH} disabled={clipBusy} onClick={doClip}>
-                  {clipBusy ? "…" : <><IcFilm /> {t("clip_btn")}</>}
-                </ActionCard>
-              </div>
-            )}
-          </Focusable>
-        </PanelSectionRow>
-      )}
-      {streaming && micActive && (
-        <PanelSectionRow>
-          <ActionCard color={micMuted ? DANGER : TWITCH} active={micMuted} onClick={toggleMicMute}>
-            {micMuted ? <><IcMicMute /> {t("mic_muted_btn")}</> : <><IcMic /> {t("mic_mute_btn")}</>}
-          </ActionCard>
-        </PanelSectionRow>
-      )}
-      {streamMsg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff", wordBreak: "break-word" }}>{streamMsg}</div></PanelSectionRow>}
+      <StreamControls platform="twitch" color={TWITCH} ready={keySet} clip
+        beforeStart={async () => {
+          // Catégorie Twitch auto = jeu en cours (Steam OU raccourci non-Steam).
+          try {
+            const gn = (Router as any)?.MainRunningApp?.display_name;
+            if (gn) { setGameName(gn); await call<[string], any>("set_game", gn); }
+          } catch { /* pas de jeu détecté → on garde la catégorie précédente */ }
+        }} />
       {!keySet && (
         <PanelSectionRow>
           <div style={{ fontSize: 11, opacity: 0.6, color: "#fff" }}>
@@ -315,8 +192,345 @@ function LiveSection() {
   );
 }
 
+// ── Contrôles du live, un exemplaire PAR plateforme ──────────────────────────
+// Twitch et YouTube ont chacun le leur (réglages compris). Le backend n'accepte
+// qu'un live à la fois : si l'autre plateforme est à l'antenne, on l'affiche et
+// le bouton reste bloqué au lieu d'échouer.
+function StreamControls({ platform, color, ready, beforeStart, clip }: {
+  platform: "twitch" | "youtube"; color: string; ready: boolean;
+  beforeStart?: () => Promise<void>; clip?: boolean;
+}) {
+  const [live, setLive] = useState<string | null>(null);  // plateforme à l'antenne
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [micActive, setMicActive] = useState(false);
+  const [micMuted, setMicMuted] = useState(false);
+  const [stMic, setStMic] = useState(false);
+  const [brb, setBrb] = useState(false);
+  const [brbBusy, setBrbBusy] = useState(false);
+  const [clipBusy, setClipBusy] = useState(false);
+
+  // Un enregistrement local appartient à l'onglet qui l'a lancé ; on le montre
+  // des deux côtés pour pouvoir l'arrêter, comme un live.
+  const mine = live === platform || live === "record";
+  const other = live && !mine ? live : null;
+  const recOnly = live === "record";
+
+  const apply = (r: any) => {
+    const p = r?.streaming ? (r?.platform || null) : null;
+    setLive((prev) => {
+      if (prev && (prev === platform || prev === "record") && !p) setMsg(t("live_stopped"));
+      return p;
+    });
+    setMicActive(!!r?.mic); setMicMuted(!!r?.mic_muted); setBrb(!!r?.brb);
+  };
+
+  useEffect(() => {
+    call<[], any>("get_config").then((c: any) => {
+      const st = platform === "youtube" ? c?.youtube?.stream : c?.stream;
+      setStMic(!!st?.mic);
+    }).catch(() => {});
+    const poll = () => call<[], any>("get_stream_status").then(apply).catch(() => {});
+    poll();
+    const id = setInterval(poll, 4000);
+    return () => clearInterval(id);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const errText = (r: any) =>
+    r?.error === "busy" ? t("err_busy", { p: platformName(r?.platform) })
+    : r?.error === "no_key" ? t("err_no_key")
+    : r?.error === "no_yt_key" ? t("err_no_yt_key")
+    : r?.error === "yt_api" ? "⚠️ YouTube : " + (r?.hint || t("err_live_failed"))
+    : r?.error === "no_loopback" ? "⚠️ " + (r?.hint || t("hint_no_loopback"))
+    : r?.error === "no_ffmpeg" ? "⚠️ " + (r?.hint || t("hint_no_ffmpeg"))
+    : r?.error === "no_x264" ? "⚠️ " + (r?.hint || t("hint_no_x264"))
+    : r?.error === "no_gst" ? "⚠️ " + (r?.hint || t("hint_no_gst"))
+    : "⚠️ " + (r?.hint || r?.error || t("err_live_failed"));
+
+  const toggleLive = async () => {
+    setBusy(true); setMsg("");
+    try {
+      if (mine) {
+        const r: any = await call("stop_stream");
+        setLive(null); setLiveSource("bonecast", false);
+        setMicActive(false); setMicMuted(false); setBrb(false);
+        if (r?.record_path) setMsg(t("recorded_to") + r.record_path);
+      } else {
+        if (beforeStart) await beforeStart();
+        const r: any = await call<[boolean, string], any>("start_stream", false, platform);
+        if (r?.ok) { setLive(platform); setMicActive(stMic); setMicMuted(false); }
+        else setMsg(errText(r));
+      }
+    } finally { setBusy(false); }
+  };
+
+  // Enregistrement local SANS passer en live (mkv dans Vidéos/BoneCast).
+  const startRecordOnly = async () => {
+    setBusy(true); setMsg("");
+    try {
+      const r: any = await call<[boolean, string], any>("start_stream", true, platform);
+      if (r?.ok) { setLive("record"); setMicActive(stMic); }
+      else setMsg(r?.error === "busy" ? errText(r)
+        : "⚠️ " + (r?.hint || r?.error || t("err_record_failed")));
+    } finally { setBusy(false); }
+  };
+
+  // BRB : écran pause à l'antenne (le live continue, micro auto-coupé).
+  const toggleBrb = async () => {
+    setBrbBusy(true);
+    try {
+      const r: any = await call(brb ? "brb_stop" : "brb_start");
+      if (r?.ok) setBrb(!brb);
+    } finally { setBrbBusy(false); }
+  };
+
+  // Clip des ~30 dernières secondes (Twitch seulement, ~15 s pour le publier).
+  const doClip = async () => {
+    setClipBusy(true);
+    try {
+      const r: any = await call("create_clip");
+      setMsg(r?.ok ? t("clip_created")
+        : r?.error === "missing_scope" ? t("reconnect_scopes")
+        : r?.error === "not_live" ? t("clip_not_live")
+        : "⚠️ " + (r?.error || t("err_clip_failed")));
+    } finally { setClipBusy(false); }
+  };
+
+  // Coupe/rétablit le micro sur le stream (n'affecte pas le vocal Discord).
+  const toggleMicMute = async () => {
+    const next = !micMuted;
+    setMicMuted(next);                        // optimiste
+    try {
+      const r: any = await call<[boolean], any>("set_mic_mute", next);
+      if (typeof r?.muted === "boolean") setMicMuted(r.muted);
+    } catch { setMicMuted(!next); }           // rollback si échec
+  };
+
+  if (other) {
+    return (
+      <PanelSectionRow>
+        <div style={{ fontSize: 12, color: "#fff", textAlign: "center", opacity: 0.85 }}>
+          {t("busy_other", { p: platformName(other) })}
+        </div>
+      </PanelSectionRow>
+    );
+  }
+
+  return (
+    <>
+      <PanelSectionRow>
+        <ActionCard color={mine ? DANGER : color} active big
+          disabled={busy || (!mine && !ready)} onClick={toggleLive}>
+          {busy ? "…" : <><IcBroadcast /> {mine ? (recOnly ? t("stop_record") : t("stop_live")) : t("go_live")}</>}
+        </ActionCard>
+      </PanelSectionRow>
+      {!live && (
+        <PanelSectionRow>
+          <ActionCard color={color} disabled={busy} onClick={startRecordOnly}>
+            {t("record_only_btn")}
+          </ActionCard>
+        </PanelSectionRow>
+      )}
+      {mine && (
+        <PanelSectionRow>
+          <div style={{ fontSize: 12, fontWeight: 800, color: DANGER, textAlign: "center" }}>
+            {recOnly ? t("status_rec")
+             : brb ? t("status_brb")
+             : platform === "youtube" ? t("status_live_yt") : t("status_live")}
+          </div>
+        </PanelSectionRow>
+      )}
+      {mine && (
+        <PanelSectionRow>
+          <Focusable flow-children="row" style={{ display: "flex", gap: 6, width: "100%" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <ActionCard color={brb ? DANGER : color} active={brb}
+                disabled={brbBusy} onClick={toggleBrb}>
+                {brb ? t("brb_back") : t("brb_pause")}
+              </ActionCard>
+            </div>
+            {clip && !recOnly && (
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <ActionCard color={color} disabled={clipBusy} onClick={doClip}>
+                  {clipBusy ? "…" : <><IcFilm /> {t("clip_btn")}</>}
+                </ActionCard>
+              </div>
+            )}
+          </Focusable>
+        </PanelSectionRow>
+      )}
+      {mine && micActive && (
+        <PanelSectionRow>
+          <ActionCard color={micMuted ? DANGER : color} active={micMuted} onClick={toggleMicMute}>
+            {micMuted ? <><IcMicMute /> {t("mic_muted_btn")}</> : <><IcMic /> {t("mic_mute_btn")}</>}
+          </ActionCard>
+        </PanelSectionRow>
+      )}
+      {msg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff", wordBreak: "break-word" }}>{msg}</div></PanelSectionRow>}
+    </>
+  );
+}
+
+const platformName = (p?: string) =>
+  p === "youtube" ? "YouTube" : p === "record" ? t("recording_name") : "Twitch";
+
+// ── Onglet YOUTUBE : connexion Google (ou clé manuelle) + titre + live ──────
+function YouTubeSection() {
+  const [yt, setYt] = useState<any>({});
+  const [titleInput, setTitleInput] = useState("");
+  const [keyInput, setKeyInput] = useState("");
+  const [authing, setAuthing] = useState(false);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authCode, setAuthCode] = useState("");
+  const [authUrl, setAuthUrl] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const refresh = () =>
+    call<[], any>("get_config").then((c: any) => setYt(c?.youtube || {})).catch(() => {});
+  useEffect(() => { refresh(); }, []);
+
+  // Poll tant qu'on attend l'autorisation Google (device flow).
+  useEffect(() => {
+    if (!authing) return;
+    const id = setInterval(async () => {
+      try {
+        const r: any = await call("yt_auth_poll");
+        if (r?.status === "ok") {
+          setAuthing(false); setAuthCode(""); setMsg(t("auth_connected")); refresh();
+        } else if (["expired", "denied", "error"].includes(r?.status)) {
+          setAuthing(false); setAuthCode("");
+          setMsg(r.status === "expired" ? t("auth_expired")
+               : r.status === "denied" ? t("auth_denied") : t("auth_error"));
+        }
+      } catch { /* on continue à poller */ }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [authing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startAuth = async () => {
+    setAuthBusy(true); setMsg("");
+    try {
+      const r: any = await call("yt_auth_start");
+      if (r?.ok) {
+        setAuthCode(r.user_code || "");
+        setAuthUrl((r.verification_uri || "google.com/device").replace(/^https?:\/\/(www\.)?/, ""));
+        setAuthing(true);
+      } else setMsg("⚠️ " + (r?.error || t("err_generic")));
+    } finally { setAuthBusy(false); }
+  };
+  const save = (patch: any) =>
+    call<[any], any>("yt_set_settings", patch).then(() => refresh()).catch(() => {});
+  const doLogout = () => call("yt_logout").then(() => refresh()).catch(() => {});
+
+  const loggedIn = !!yt.logged_in;
+  const ready = loggedIn || !!yt.key_set;
+
+  return (
+    <PanelSection title={t("yt_title")}>
+      {loggedIn ? (
+        <PanelSectionRow>
+          <div style={{ fontSize: 13, color: YOUTUBE, fontWeight: 700 }}>
+            <FaYoutube style={{ verticalAlign: "-0.125em" }} /> {yt.channel || t("connected")}
+          </div>
+        </PanelSectionRow>
+      ) : yt.login_available && (
+        <>
+          <PanelSectionRow>
+            <ActionCard color={YOUTUBE} active disabled={authBusy || authing} onClick={startAuth}>
+              <FaYoutube style={{ verticalAlign: "-0.125em" }} /> {authing ? t("login_waiting") : authBusy ? "…" : t("yt_login_button")}
+            </ActionCard>
+          </PanelSectionRow>
+          {authCode && (
+            <PanelSectionRow>
+              <div style={{ fontSize: 12, color: "#fff", lineHeight: 1.6, border: `1px solid ${YOUTUBE}`, borderRadius: 8, padding: 10, textAlign: "center" }}>
+                {t("go_to")} <span style={{ color: YOUTUBE, fontWeight: 700 }}>{authUrl}</span> {t("and_enter")}
+                <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: 4, marginTop: 4 }}>{authCode}</div>
+              </div>
+            </PanelSectionRow>
+          )}
+        </>
+      )}
+      {loggedIn && (
+        <>
+          <PanelSectionRow>
+            <TextField label={t("title_label")} value={titleInput}
+              placeholder={yt.title || t("title_placeholder")}
+              onChange={(e: any) => setTitleInput(e?.target?.value ?? "")} />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ActionCard color={YOUTUBE} disabled={!titleInput}
+              onClick={() => { save({ title: titleInput }); setTitleInput(""); }}>
+              <IcSave /> {t("save_title")}
+            </ActionCard>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <Dropdown strDefaultLabel={t("yt_privacy")} selectedOption={yt.privacy || "public"}
+              rgOptions={[
+                { data: "public", label: t("yt_public") },
+                { data: "unlisted", label: t("yt_unlisted") },
+                { data: "private", label: t("yt_private") },
+              ]} onChange={(e: any) => save({ privacy: e.data })} />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
+              <IcController /> {t("yt_category_note")}
+            </div>
+          </PanelSectionRow>
+        </>
+      )}
+      {!loggedIn && (
+        <>
+          <PanelSectionRow>
+            <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
+              <IcKey /> {yt.login_available ? t("yt_or_key") : t("yt_key_intro")}
+            </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <TextField label={t("yt_key_label")} value={keyInput} bIsPassword
+              placeholder={yt.key_set ? t("yt_key_saved") : ""}
+              onChange={(e: any) => setKeyInput(e?.target?.value ?? "")} />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <Focusable flow-children="row" style={{ display: "flex", gap: 6, width: "100%" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <ActionCard color={YOUTUBE} disabled={!keyInput.trim()}
+                  onClick={() => { save({ key: keyInput }); setKeyInput(""); }}>
+                  <IcSave /> {t("yt_key_save")}
+                </ActionCard>
+              </div>
+              {yt.key_set && (
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <ActionCard color={DANGER} onClick={() => save({ key: "" })}>
+                    {t("yt_key_clear")}
+                  </ActionCard>
+                </div>
+              )}
+            </Focusable>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <div style={{ fontSize: 10, opacity: 0.6, color: "#fff" }}>{t("yt_key_help")}</div>
+          </PanelSectionRow>
+        </>
+      )}
+      <StreamControls platform="youtube" color={YOUTUBE} ready={ready} />
+      {msg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff" }}>{msg}</div></PanelSectionRow>}
+      {loggedIn && (
+        <PanelSectionRow>
+          <ActionCard color={DANGER} onClick={doLogout}>
+            <IcLogout /> {t("yt_logout")}
+          </ActionCard>
+        </PanelSectionRow>
+      )}
+    </PanelSection>
+  );
+}
+
 // ── Onglet CHAT : overlay + écrire dans son chat ─────────────────────────────
-function ChatSection() {
+function ChatSection({ platform }: { platform: "twitch" | "youtube" }) {
+  const yt = platform === "youtube";
+  const color = yt ? YOUTUBE : TWITCH;
+  const [canSend, setCanSend] = useState(!yt);
+  const [otherOverlay, setOtherOverlay] = useState<string | null>(null);
   const [channelInput, setChannelInput] = useState("");
   const [channelSet, setChannelSet] = useState("");
   const [overlayOn, setOverlayOn] = useState(false);
@@ -327,17 +541,24 @@ function ChatSection() {
 
   const refresh = () =>
     call<[], any>("get_config").then((c: any) => {
-      if (typeof c?.channel === "string") setChannelSet(c.channel);
-      setOverlayOn(!!c?.overlay_on);
-      if (c?.overlay) setOv((p: any) => ({ ...p, ...c.overlay }));
+      const src = yt ? c?.youtube : c;
+      setChannelSet((yt ? src?.chat_source : src?.channel) || "");
+      setOverlayOn(!!src?.overlay_on);
+      if (src?.overlay) setOv((p: any) => ({ ...p, ...src.overlay }));
+      if (yt) setCanSend(!!src?.can_send);
+      const pf = c?.overlay_platform;
+      setOtherOverlay(pf && pf !== platform ? pf : null);
     }).catch(() => {});
   useEffect(() => { refresh(); }, []);
 
   const pushOv = (patch: any) =>
-    setOv((prev: any) => { const next = { ...prev, ...patch }; call("set_overlay_settings", next).catch(() => {}); return next; });
+    setOv((prev: any) => { const next = { ...prev, ...patch }; call("set_overlay_settings", next, platform).catch(() => {}); return next; });
   const toggleOverlay = async (v: boolean) => {
-    setOverlayOn(v);
-    try { await call(v ? "start_overlay" : "stop_overlay"); } catch { /* noop */ }
+    setOverlayOn(v); setChatMsg("");
+    try {
+      const r: any = v ? await call<[string], any>("start_overlay", platform) : await call("stop_overlay");
+      if (r?.error === "busy") setChatMsg(t("overlay_busy", { p: platformName(r?.platform) }));
+    } catch { /* noop */ }
     refresh();
   };
 
@@ -346,51 +567,62 @@ function ChatSection() {
     if (!chatInput.trim()) return;
     setChatBusy(true); setChatMsg("");
     try {
-      const r: any = await call<[string], any>("send_chat", chatInput);
+      const r: any = await call<[string], any>(yt ? "yt_send_chat" : "send_chat", chatInput);
       if (r?.ok) { setChatInput(""); setChatMsg(t("sent")); }
       else setChatMsg(r?.error === "missing_scope"
         ? t("reconnect_scopes")
+        : r?.error === "not_live" ? t("yt_chat_not_live")
         : "⚠️ " + (r?.error || t("err_send_failed")));
     } finally { setChatBusy(false); }
   };
 
   return (
     <>
-      <PanelSection title={t("chat_write_title")}>
+      {canSend && <PanelSection title={t("chat_write_title")}>
         <PanelSectionRow>
           <TextField label={t("message_label")} value={chatInput}
             placeholder={t("chat_placeholder")}
             onChange={(e: any) => setChatInput(e?.target?.value ?? "")} />
         </PanelSectionRow>
         <PanelSectionRow>
-          <ActionCard color={TWITCH} disabled={chatBusy || !chatInput.trim()} onClick={sendChat}>
+          <ActionCard color={color} disabled={chatBusy || !chatInput.trim()} onClick={sendChat}>
             {chatBusy ? "…" : <><IcSend /> {t("send")}</>}
           </ActionCard>
         </PanelSectionRow>
         {chatMsg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff" }}>{chatMsg}</div></PanelSectionRow>}
-      </PanelSection>
+      </PanelSection>}
       <PanelSection title={t("overlay_title")}>
         <PanelSectionRow>
           <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
-            {channelSet ? t("channel_current", { ch: channelSet }) : t("channel_none")}
+            {yt ? (channelSet ? t("yt_channel_current", { ch: channelSet }) : t("yt_channel_none"))
+              : channelSet ? t("channel_current", { ch: channelSet }) : t("channel_none")}
           </div>
         </PanelSectionRow>
         <PanelSectionRow>
           <TextField label={t("channel_other_label")} value={channelInput}
-            placeholder={channelSet || t("channel_placeholder")}
+            placeholder={channelSet || (yt ? t("yt_channel_placeholder") : t("channel_placeholder"))}
             onChange={(e: any) => setChannelInput(e?.target?.value ?? "")} />
         </PanelSectionRow>
         <PanelSectionRow>
-          <ActionCard color={TWITCH} disabled={!channelInput}
-            onClick={() => call<[string], any>("set_channel", channelInput)
+          <ActionCard color={color} disabled={!channelInput}
+            onClick={() => (yt ? call<[any], any>("yt_set_settings", { chat_channel: channelInput })
+              : call<[string], any>("set_channel", channelInput))
               .then(() => { setChannelInput(""); refresh(); }).catch(() => {})}>
             <IcSave /> {t("channel_use")}
           </ActionCard>
         </PanelSectionRow>
+        {otherOverlay && (
+          <PanelSectionRow>
+            <div style={{ fontSize: 11, color: "#ffcc8a" }}>
+              {t("overlay_busy", { p: platformName(otherOverlay) })}
+            </div>
+          </PanelSectionRow>
+        )}
+        {!canSend && chatMsg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff" }}>{chatMsg}</div></PanelSectionRow>}
         <PanelSectionRow>
           <ToggleField label={t("overlay_show")}
             description={channelSet ? t("overlay_desc") : t("overlay_need_channel")}
-            checked={overlayOn} onChange={toggleOverlay} disabled={!channelSet} bottomSeparator="none" />
+            checked={overlayOn} onChange={toggleOverlay} disabled={!channelSet || !!otherOverlay} bottomSeparator="none" />
         </PanelSectionRow>
         {overlayOn && (
           <>
@@ -421,14 +653,14 @@ function ChatSection() {
               ]} selectedOption={ov.pos} onChange={(e: any) => pushOv({ pos: e.data })}
                 strDefaultLabel={t("position")} />
             </PanelSectionRow>
-            <PanelSectionRow>
+            {!yt && <PanelSectionRow>
               <ToggleField label={t("show_badges")} checked={!!ov.badges}
                 onChange={(v: boolean) => pushOv({ badges: v })} bottomSeparator="none" />
-            </PanelSectionRow>
-            <PanelSectionRow>
+            </PanelSectionRow>}
+            {!yt && <PanelSectionRow>
               <ToggleField label={t("third_party_emotes")} checked={!!ov.thirdParty}
                 onChange={(v: boolean) => pushOv({ thirdParty: v })} bottomSeparator="none" />
-            </PanelSectionRow>
+            </PanelSectionRow>}
           </>
         )}
       </PanelSection>
@@ -437,7 +669,7 @@ function ChatSection() {
 }
 
 // ── Onglet CONFIG : réglages stream + mises à jour + à propos + déconnexion ──
-function StreamSettings() {
+function StreamSettings({ platform }: { platform: "twitch" | "youtube" }) {
   const [encoders, setEncoders] = useState<string[]>(["software"]);
   const [steamcord, setSteamcord] = useState(false);
   const [st, setSt] = useState<any>({ resolution: "720p", fps: 30, bitrate: 4500,
@@ -445,7 +677,8 @@ function StreamSettings() {
 
   useEffect(() => {
     call<[], any>("get_config").then((c: any) => {
-      if (c?.stream) setSt((p: any) => ({ ...p, ...c.stream }));
+      const cur = platform === "youtube" ? c?.youtube?.stream : c?.stream;
+      if (cur) setSt((p: any) => ({ ...p, ...cur }));
       setSteamcord(!!c?.steamcord);
     }).catch(() => {});
     call<[], any>("get_encoders").then((e: any) => {
@@ -456,7 +689,7 @@ function StreamSettings() {
   // Applique un réglage et le persiste côté backend (par compte).
   const pushSt = (patch: any) =>
     setSt((prev: any) => { const next = { ...prev, ...patch };
-      call("set_stream_settings", next).catch(() => {}); return next; });
+      call("set_stream_settings", next, platform).catch(() => {}); return next; });
 
   return (
     <PanelSection title={t("quality_title")}>
@@ -674,7 +907,6 @@ function AboutSection() {
 function ConfigSection() {
   return (
     <>
-      <StreamSettings />
       <UpdaterSection />
       <AboutSection />
     </>
@@ -875,47 +1107,56 @@ function WatchSection() {
 }
 
 function Content() {
-  const [tab, setTab] = useState<"live" | "watch" | "chat" | "config">("live");
+  // Deux plateformes indépendantes : chacune a ses sous-onglets et SES réglages.
+  // Seuls les mises à jour et l'« À propos » sont communs (onglet Config).
+  const [platform, setPlatform] = useState<"twitch" | "youtube" | "config">("twitch");
+  const [tab, setTab] = useState<"live" | "watch" | "chat" | "settings">("live");
   const [focus, setFocus] = useState<string | null>(null);
+  const tb = (id: string, active: boolean, onClick: () => void, label: any, color?: string) => (
+    <TabBtn active={active} focused={focus === id} color={color}
+      onClick={onClick}
+      onFocus={() => setFocus(id)}
+      onBlur={() => setFocus((f: any) => (f === id ? null : f))}>
+      {label}
+    </TabBtn>
+  );
+  const pick = (p: "twitch" | "youtube" | "config") => { setPlatform(p); setTab("live"); };
+  const accent = platform === "youtube" ? YOUTUBE : TWITCH;
   return (
     <>
       <PanelSection>
         <PanelSectionRow>
-          {/* Rangée d'onglets = UN arrêt de nav vertical, gauche/droite circule
-              entre les onglets (même idiome que Steamcord). */}
-          <Focusable flow-children="row"
-            style={{ display: "flex", gap: 4, width: "100%", boxSizing: "border-box" }}>
-            <TabBtn active={tab === "live"} focused={focus === "live"}
-              onClick={() => setTab("live")}
-              onFocus={() => setFocus("live")}
-              onBlur={() => setFocus((f: any) => (f === "live" ? null : f))}>
-              <IcBroadcast /> {t("tab_live")}
-            </TabBtn>
-            <TabBtn active={tab === "watch"} focused={focus === "watch"}
-              onClick={() => setTab("watch")}
-              onFocus={() => setFocus("watch")}
-              onBlur={() => setFocus((f: any) => (f === "watch" ? null : f))}>
-              <IcBroadcast /> {t("tab_watch")}
-            </TabBtn>
-            <TabBtn active={tab === "chat"} focused={focus === "chat"}
-              onClick={() => setTab("chat")}
-              onFocus={() => setFocus("chat")}
-              onBlur={() => setFocus((f: any) => (f === "chat" ? null : f))}>
-              <IcChat /> {t("tab_chat")}
-            </TabBtn>
-            <TabBtn active={tab === "config"} focused={focus === "config"}
-              onClick={() => setTab("config")}
-              onFocus={() => setFocus("config")}
-              onBlur={() => setFocus((f: any) => (f === "config" ? null : f))}>
-              {t("tab_config")}
-            </TabBtn>
-          </Focusable>
+          <div style={{ width: "100%" }}>
+            <TabRow>
+              {tb("p_twitch", platform === "twitch", () => pick("twitch"),
+                <><FaTwitch style={{ verticalAlign: "-0.125em" }} /> Twitch</>)}
+              {tb("p_youtube", platform === "youtube", () => pick("youtube"),
+                <><FaYoutube style={{ verticalAlign: "-0.125em" }} /> YouTube</>, YOUTUBE)}
+              {tb("p_config", platform === "config", () => pick("config"), <IcGear />, "#8e9297")}
+            </TabRow>
+            {platform !== "config" && (
+              <TabRow>
+                {tb("t_live", tab === "live", () => setTab("live"),
+                  <><IcBroadcast /> {t("tab_live")}</>, accent)}
+                {platform === "twitch" && tb("t_watch", tab === "watch", () => setTab("watch"),
+                  <><IcBroadcast /> {t("tab_watch")}</>)}
+                {tb("t_chat", tab === "chat", () => setTab("chat"),
+                  <><IcChat /> {t("tab_chat")}</>, accent)}
+                {tb("t_settings", tab === "settings", () => setTab("settings"),
+                  <><IcSliders /> {t("tab_settings")}</>, accent)}
+              </TabRow>
+            )}
+          </div>
         </PanelSectionRow>
       </PanelSection>
-      {tab === "live" && <LiveSection />}
-      {tab === "watch" && <WatchSection />}
-      {tab === "chat" && <ChatSection />}
-      {tab === "config" && <ConfigSection />}
+      {platform === "twitch" && tab === "live" && <LiveSection />}
+      {platform === "twitch" && tab === "watch" && <WatchSection />}
+      {platform === "twitch" && tab === "chat" && <ChatSection key="tw-chat" platform="twitch" />}
+      {platform === "twitch" && tab === "settings" && <StreamSettings key="tw" platform="twitch" />}
+      {platform === "youtube" && tab === "live" && <YouTubeSection />}
+      {platform === "youtube" && tab === "chat" && <ChatSection key="yt-chat" platform="youtube" />}
+      {platform === "youtube" && tab === "settings" && <StreamSettings key="yt" platform="youtube" />}
+      {platform === "config" && <ConfigSection />}
     </>
   );
 }
@@ -1014,7 +1255,7 @@ export default definePlugin(() => {
   return {
     name: "BoneCast",
     title: <div className={staticClasses.Title}>BoneCast</div>,
-    icon: <FaTwitch />,
+    icon: <BoneCastIcon />,
     content: <Content />,
     onDismount() { clearInterval(liveTimer); setLiveSource("bonecast", false); },
   };

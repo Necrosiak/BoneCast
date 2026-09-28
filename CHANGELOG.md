@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.0 — 2026-09-28
+
+### YouTube, next to Twitch
+
+BoneCast now has two platforms, each in its own tab with its own settings:
+**Twitch** (Live, Watch, Chat, Settings) and **YouTube** (Live, Chat,
+Settings). Updates and About live under the ⚙ tab.
+
+- **Go live on YouTube** with your stream key from YouTube Studio. Everything
+  from the Twitch side comes along: pause screen (BRB), live mic mute, local
+  recording, Discord audio, and **its own stream settings** — resolution,
+  bitrate, encoder and so on are no longer shared with Twitch.
+- **YouTube chat overlay** over the game, with no account and no API quota:
+  type your channel (`@handle`), and it waits for your live to start, then
+  connects on its own. Channel owner, moderators and members are coloured,
+  Super Chats show their amount.
+- **One at a time:** a Twitch live and a YouTube live never run together, and
+  neither do the two chat overlays. The other tab says what is running
+  instead of offering a button that would fail.
+- Logging in with your YouTube account (stream key and title set
+  automatically, writing in your chat) is prepared and comes in the next
+  update.
+
+### Tabs and icon
+
+- Tabs now look like Steamcord's: rounded tops, the active one underlined in
+  its platform's colour, inactive ones dimmed.
+- New plugin icon — a bone and a broadcast signal — instead of the Twitch logo.
+
+### Fix
+
+- When the stream process stopped on its own (network drop, rejected key),
+  nothing tidied up after it, and starting a live could report a failure even
+  though the stream was running: the method meant to watch for this was called
+  but had never been written. It now exists and cleans up like a normal stop.
+
+
 ## 0.3.9 — 2026-09-27
 
 ### A successful update now says so

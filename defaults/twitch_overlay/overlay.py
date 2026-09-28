@@ -43,7 +43,11 @@ def set_overlay_atom(xid):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--channel", required=True)
+    ap.add_argument("--channel", default="")
+    # YouTube : l'overlay est le même, seul le chat change de source (lu par
+    # yt_chat.py ici, puis poussé dans la page — voir window.bcYt).
+    ap.add_argument("--platform", default="twitch", choices=("twitch", "youtube"))
+    ap.add_argument("--yt-source", default="")
     ap.add_argument("--state-dir", default=os.path.expanduser("~/.local/share/bonecast/twitch_overlay"))
     args = ap.parse_args()
 
@@ -59,6 +63,8 @@ def main():
     except Exception:
         pass
     init["channel"] = channel
+    init["platform"] = args.platform
+    init["ytSource"] = args.yt_source
     init["stateUrl"] = "file://" + state_path
 
     # Contexte WebKit à data dir PERSISTANT → le localStorage (réglages du
@@ -81,7 +87,7 @@ def main():
     win.set_skip_taskbar_hint(True)
     win.set_skip_pager_hint(True)
     win.set_app_paintable(True)
-    win.set_title("BoneCast Twitch Chat")
+    win.set_title("BoneCast YouTube Chat" if args.platform == "youtube" else "BoneCast Twitch Chat")
     # Overlay = affichage PUR : ne doit JAMAIS prendre le focus ni manger les
     # inputs. En gamemode gamescope l'isole déjà (plan overlay), mais en
     # Bureau/Big Picture la fenêtre plein écran volait le focus de Steam →
@@ -142,6 +148,37 @@ def main():
               % (hex(xid), ok, passthrough, channel), flush=True)
 
     win.connect("map", on_map)
+
+    if args.platform == "youtube":
+        import yt_chat
+
+        def js(code):
+            # Toujours depuis le thread GTK : WebKit n'est pas thread-safe.
+            def run():
+                try:
+                    wv.evaluate_javascript(code, -1, None, None, None, None, None)
+                except Exception:
+                    wv.run_javascript(code, None, None, None)
+                return False
+            GLib.idle_add(run)
+
+        def on_messages(msgs):
+            js("window.bcYt && window.bcYt.push(%s);" % json.dumps(msgs))
+
+        def on_status(state, detail):
+            print("[overlay] youtube %s %s" % (state, detail), flush=True)
+            js("window.bcYt && window.bcYt.status(%s, %s);"
+               % (json.dumps(state), json.dumps(detail)))
+
+        # Démarré au chargement de la page, pas avant : sinon les premiers
+        # messages arriveraient avant que window.bcYt existe.
+        started = {"t": None}
+
+        def on_load(_wv, event):
+            if event == WebKit2.LoadEvent.FINISHED and started["t"] is None:
+                started["t"] = yt_chat.YtChat(args.yt_source, on_messages, on_status)
+                started["t"].start()
+        wv.connect("load-changed", on_load)
     win.connect("destroy", Gtk.main_quit)
     win.show_all()
     Gtk.main()

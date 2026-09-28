@@ -5,7 +5,7 @@
   "flags": [],
   "publish": {
     "tags": ["twitch", "streaming", "chat"],
-    "description": "Twitch in Steam Gaming Mode — go live with editable title & auto game category, plus a transparent chat overlay over the game.",
+    "description": "Twitch and YouTube in Steam Gaming Mode — go live with editable title & auto game category, plus a transparent chat overlay over the game.",
     "image": "https://raw.githubusercontent.com/Necrosiak/BoneCast/main/assets/store-banner.png"
   }
 }

@@ -1,6 +1,6 @@
 # BoneCast 🦴📡
 
-**Twitch in de Steam-spelmodus** — een [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)-plug-in voor Steam Deck / Bazzite / SteamOS.
+**Twitch en YouTube in de Steam-spelmodus** — een [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)-plug-in voor Steam Deck / Bazzite / SteamOS.
 
 🌍 **Talen:** [English](../README.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Italiano](README.it.md) · [Português](README.pt.md) · **Nederlands** · [Polski](README.pl.md) · [Русский](README.ru.md)
 
@@ -16,6 +16,7 @@
 BoneCast zet alles wat je nodig hebt om te streamen naar **Twitch** rechtstreeks in het **Quick Access Menu** van Steam — geen desktop, geen toetsenbord, volledig gamepad-vriendelijk van inloggen tot live gaan.
 
 - **Eén Twitch-login** *(apparaatcode — gamepad-vriendelijk)*: je voert een korte code in op `twitch.tv/activate`, en BoneCast haalt je **streamsleutel automatisch** op. Nooit meer handmatig kopiëren en plakken.
+- **▶️ YouTube-tabblad** *(nieuw in 0.4.0)* — ga live op YouTube met je streamsleutel, met **eigen streaminstellingen** (resolutie, bitrate, encoder, microfoon, Discord-audio, opname), pauzescherm en microfoon dempen tijdens de stream, plus een **YouTube-chatoverlay** over het spel, zonder account. Steeds één livestream en één chatoverlay: Twitch en YouTube draaien nooit tegelijk. *Inloggen met je YouTube-account volgt hierna.*
 - **Ga live vanuit het QAM** — één knop start en stopt de RTMP-stream. Een **● LIVE**-badge is zichtbaar terwijl je uitzendt.
 - **Bewerkbare streamtitel** — ingesteld vanuit de plug-in, aanpasbaar **zelfs tijdens de uitzending**.
 - **Automatische spelcategorie** — uitgelezen van het draaiende Steam-spel (werkt ook voor niet-Steam-snelkoppelingen) en direct bijgewerkt. Valt terug op *Just Chatting* wanneer een spel geen bijpassende Twitch-categorie heeft.

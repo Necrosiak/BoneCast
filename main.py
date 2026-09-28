@@ -110,9 +110,11 @@ class Plugin:
     _TWITCH_JUST_CHATTING = "509658"          # game_id « Just Chatting »
     _tw_device = None                          # état transitoire du device flow
     _overlay_proc = None
+    _overlay_platform = None                   # "twitch" | "youtube" (un overlay à la fois)
     _watch_proc = None                          # helper GTK : lives Twitch par-dessus le jeu
     _watch_start_lock = None                    # évite deux starts QAM simultanés
-    _stream_proc = None                        # ffmpeg RTMP (live Twitch)
+    _stream_proc = None                        # ffmpeg RTMP (live Twitch ou YouTube)
+    _stream_platform = None                    # "twitch" | "youtube" | "record" (un seul à la fois)
     _camera_feeder = None                      # gst_camera.py → /dev/video42
     _TWITCH_INGEST = "rtmp://ingest.global-contribute.live-video.net/app"
     _OVERLAY_DEFAULTS = {"opacity": 62, "fontSize": 13, "width": 360,
@@ -175,7 +177,10 @@ class Plugin:
         """État exposé au frontend — JAMAIS de token/clé en clair."""
         cfg = cls._load_cfg()
         oauth = cfg.get("oauth") or {}
+        yt = cfg.get("youtube") or {}
         ov = cls._overlay_proc
+        ov_on = ov is not None and ov.returncode is None
+        ov_pf = cls._overlay_platform if ov_on else None
         return {
             "logged_in": bool(oauth.get("access_token")),
             "login": oauth.get("login", ""),
@@ -184,7 +189,8 @@ class Plugin:
             "game_name": cfg.get("game_name", ""),
             # Chaîne de l'overlay : override manuel sinon = ta propre chaîne (login OAuth).
             "channel": cfg.get("channel") or oauth.get("login", ""),
-            "overlay_on": ov is not None and ov.returncode is None,
+            "overlay_on": ov_pf == "twitch",
+            "overlay_platform": ov_pf,
             "overlay": {**cls._OVERLAY_DEFAULTS, **(cfg.get("overlay") or {})},
             "watching": cls._watch_proc is not None and cls._watch_proc.returncode is None,
             "watch": {**cls._WATCH_DEFAULTS, **(cfg.get("watch") or {})},
@@ -192,6 +198,22 @@ class Plugin:
             and cls._stream_proc.returncode is None,
             "stream": {**cls._STREAM_DEFAULTS, **(cfg.get("stream") or {})},
             "steamcord": cls._steamcord_present(),
+            "platform": cls._stream_platform if (cls._stream_proc is not None
+                                                 and cls._stream_proc.returncode is None) else None,
+            "youtube": {
+                "login_available": cls._yt_login_available(),
+                "logged_in": bool((yt.get("oauth") or {}).get("access_token")),
+                "channel": yt.get("channel_title", ""),
+                "key_set": bool(yt.get("key")),
+                "title": yt.get("title", ""),
+                "privacy": yt.get("privacy") if yt.get("privacy") in cls._YT_PRIVACY else "public",
+                "stream": {**cls._STREAM_DEFAULTS, **(yt.get("stream") or {})},
+                "chat_channel": yt.get("chat_channel", ""),
+                "chat_source": cls._yt_chat_source(cfg),
+                "can_send": bool((yt.get("oauth") or {}).get("access_token")),
+                "overlay_on": ov_pf == "youtube",
+                "overlay": {**cls._OVERLAY_DEFAULTS, **(yt.get("overlay") or {})},
+            },
         }
 
     @staticmethod
@@ -440,21 +462,326 @@ class Plugin:
     async def set_game(cls, game_name: str = ""):
         return await cls.update_channel(game_name=game_name)
 
+    # ── YouTube ──────────────────────────────────────────────────────────────
+    # Même modèle que Twitch : connexion par code (google.com/device), puis la
+    # clé de stream et le live sont créés par l'API. La clé MANUELLE reste en
+    # secours : tant que Google n'a pas vérifié l'appli, la connexion est
+    # plafonnée (comptes de test) et les jetons expirent au bout de 7 jours.
+    #
+    # Client « TV et appareils à saisie limitée » : Google exige le secret dans
+    # ce flux, mais le déclare lui-même non confidentiel pour ce type de client
+    # (il est embarqué dans chaque appli de TV). Vide = connexion masquée.
+    _YT_CLIENT_ID = ""
+    _YT_CLIENT_SECRET = ""
+    _YT_SCOPE = "https://www.googleapis.com/auth/youtube"
+    _YT_INGEST = "rtmp://a.rtmp.youtube.com/live2"
+    _YT_API = "https://www.googleapis.com/youtube/v3/"
+    _YT_GAMING = "20"                          # catégorie « Jeux vidéo »
+    _YT_PRIVACY = ("public", "unlisted", "private")
+    _yt_device = None
+
+    @classmethod
+    def _yt_cfg(cls, cfg=None):
+        cfg = cfg if cfg is not None else cls._load_cfg()
+        return cfg.setdefault("youtube", {})
+
+    @classmethod
+    def _yt_login_available(cls):
+        return bool(cls._YT_CLIENT_ID and cls._YT_CLIENT_SECRET)
+
+    @classmethod
+    async def yt_auth_start(cls):
+        if not cls._yt_login_available():
+            return {"ok": False, "error": "login_unavailable"}
+        try:
+            st, body = await cls._http(
+                "POST", "https://oauth2.googleapis.com/device/code",
+                data={"client_id": cls._YT_CLIENT_ID, "scope": cls._YT_SCOPE})
+            if st != 200 or "device_code" not in body:
+                return {"ok": False, "error": body.get("error_description")
+                        or body.get("error") or f"http {st}"}
+            cls._yt_device = {
+                "device_code": body["device_code"],
+                "interval": int(body.get("interval", 5)),
+                "expires_at": time() + int(body.get("expires_in", 1800)),
+            }
+            return {"ok": True, "user_code": body["user_code"],
+                    "verification_uri": body.get("verification_url")
+                    or "https://www.google.com/device"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @classmethod
+    async def yt_auth_poll(cls):
+        dev = cls._yt_device
+        if not dev:
+            return {"status": "idle"}
+        if time() > dev["expires_at"]:
+            cls._yt_device = None
+            return {"status": "expired"}
+        try:
+            st, body = await cls._http(
+                "POST", "https://oauth2.googleapis.com/token",
+                data={"client_id": cls._YT_CLIENT_ID,
+                      "client_secret": cls._YT_CLIENT_SECRET,
+                      "device_code": dev["device_code"],
+                      "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
+            if st == 200 and body.get("access_token"):
+                cls._yt_device = None
+                await cls._yt_store_tokens(body)
+                return {"status": "ok", "login": cls._yt_cfg().get("channel_title", "")}
+            err = str(body.get("error", ""))
+            if err == "expired_token":
+                cls._yt_device = None
+                return {"status": "expired"}
+            if err == "access_denied":
+                cls._yt_device = None
+                return {"status": "denied"}
+            return {"status": "pending"}       # authorization_pending / slow_down
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    @classmethod
+    async def _yt_store_tokens(cls, tok):
+        cfg = cls._load_cfg()
+        yt = cls._yt_cfg(cfg)
+        oauth = yt.get("oauth") or {}
+        oauth["access_token"] = tok["access_token"]
+        if tok.get("refresh_token"):
+            oauth["refresh_token"] = tok["refresh_token"]
+        oauth["expires_at"] = time() + int(tok.get("expires_in", 3600))
+        yt["oauth"] = oauth
+        cls._save_cfg(cfg)
+        # Nom de la chaîne, pour l'afficher comme « @login » côté Twitch.
+        st, body = await cls._yt_api("GET", "channels",
+                                     params={"part": "snippet", "mine": "true"})
+        items = (body or {}).get("items") or []
+        if st == 200 and items:
+            sn = items[0].get("snippet") or {}
+            cfg = cls._load_cfg()
+            yt = cls._yt_cfg(cfg)
+            yt["channel_title"] = sn.get("title", "")
+            yt["channel_id"] = items[0].get("id", "")
+            yt["channel_handle"] = sn.get("customUrl", "")
+            cls._save_cfg(cfg)
+
+    @classmethod
+    async def yt_logout(cls):
+        cfg = cls._load_cfg()
+        yt = cls._yt_cfg(cfg)
+        for k in ("oauth", "channel_title", "channel_handle", "channel_id", "stream_id",
+                  "api_key", "api_ingest", "broadcast_id", "live_chat_id"):
+            yt.pop(k, None)
+        cls._save_cfg(cfg)
+        return {"ok": True}
+
+    @classmethod
+    async def _yt_bearer(cls):
+        oauth = cls._yt_cfg().get("oauth") or {}
+        at = oauth.get("access_token")
+        if not at:
+            return None
+        if time() < oauth.get("expires_at", 0) - 60:
+            return at
+        rt = oauth.get("refresh_token")
+        if not rt:
+            return None
+        st, body = await cls._http(
+            "POST", "https://oauth2.googleapis.com/token",
+            data={"client_id": cls._YT_CLIENT_ID,
+                  "client_secret": cls._YT_CLIENT_SECRET,
+                  "grant_type": "refresh_token", "refresh_token": rt})
+        if st == 200 and body.get("access_token"):
+            cfg = cls._load_cfg()
+            o = cls._yt_cfg(cfg).setdefault("oauth", {})
+            o["access_token"] = body["access_token"]
+            o["expires_at"] = time() + int(body.get("expires_in", 3600))
+            cls._save_cfg(cfg)
+            return body["access_token"]
+        if (body or {}).get("error") == "invalid_grant":
+            # Jeton révoqué ou expiré (7 jours en mode test chez Google) :
+            # on se déconnecte proprement plutôt que d'échouer à chaque live.
+            logger.info("[youtube] refresh refusé (invalid_grant) — déconnexion")
+            await cls.yt_logout()
+        return None
+
+    @classmethod
+    async def _yt_api(cls, method, path, *, params=None, json_body=None):
+        at = await cls._yt_bearer()
+        if not at:
+            return None, {"error": "not_logged_in"}
+        return await cls._http(method, cls._YT_API + path,
+                               headers={"Authorization": f"Bearer {at}"},
+                               params=params, json_body=json_body)
+
+    @staticmethod
+    def _yt_error(body, st):
+        err = (body or {}).get("error")
+        if isinstance(err, dict):
+            reason = ((err.get("errors") or [{}])[0]).get("reason") or ""
+            return reason or err.get("message") or f"http {st}"
+        return str(err or f"http {st}")
+
+    @classmethod
+    async def _yt_ensure_stream(cls):
+        """Flux d'ingestion réutilisable → (clé, url d'ingestion), créé une fois."""
+        yt = cls._yt_cfg()
+        sid = yt.get("stream_id")
+        if sid:
+            st, body = await cls._yt_api("GET", "liveStreams",
+                                         params={"part": "cdn", "id": sid})
+            items = (body or {}).get("items") or []
+            if st == 200 and items:
+                ing = (items[0].get("cdn") or {}).get("ingestionInfo") or {}
+                if ing.get("streamName"):
+                    return ing["streamName"], ing.get("ingestionAddress") or cls._YT_INGEST
+        st, body = await cls._yt_api(
+            "POST", "liveStreams", params={"part": "snippet,cdn,contentDetails"},
+            json_body={"snippet": {"title": "BoneCast"},
+                       "cdn": {"ingestionType": "rtmp", "resolution": "variable",
+                               "frameRate": "variable"},
+                       "contentDetails": {"isReusable": True}})
+        if st not in (200, 201):
+            raise RuntimeError(cls._yt_error(body, st))
+        ing = (body.get("cdn") or {}).get("ingestionInfo") or {}
+        cfg = cls._load_cfg()
+        y = cls._yt_cfg(cfg)
+        y["stream_id"] = body.get("id")
+        cls._save_cfg(cfg)
+        return ing.get("streamName"), ing.get("ingestionAddress") or cls._YT_INGEST
+
+    @classmethod
+    async def _yt_create_broadcast(cls):
+        """Crée le live (titre, visibilité), démarrage/arrêt auto, lié au flux."""
+        cfg = cls._load_cfg()
+        yt = cls._yt_cfg(cfg)
+        title = (yt.get("title") or "").strip() or "BoneCast live"
+        privacy = yt.get("privacy") if yt.get("privacy") in cls._YT_PRIVACY else "public"
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        st, body = await cls._yt_api(
+            "POST", "liveBroadcasts", params={"part": "snippet,status,contentDetails"},
+            json_body={"snippet": {"title": title[:100], "scheduledStartTime": now},
+                       "status": {"privacyStatus": privacy,
+                                  "selfDeclaredMadeForKids": False},
+                       # autoStart : YouTube passe le live à l'antenne dès que
+                       # le flux arrive ; pas de phase « test » sans moniteur.
+                       "contentDetails": {"enableAutoStart": True,
+                                          "enableAutoStop": True,
+                                          "monitorStream": {"enableMonitorStream": False}}})
+        if st not in (200, 201):
+            raise RuntimeError(cls._yt_error(body, st))
+        bid = body.get("id")
+        sid = yt.get("stream_id")
+        st, b2 = await cls._yt_api("POST", "liveBroadcasts/bind",
+                                   params={"part": "id", "id": bid, "streamId": sid})
+        if st != 200:
+            raise RuntimeError(cls._yt_error(b2, st))
+        cfg = cls._load_cfg()
+        y = cls._yt_cfg(cfg)
+        y["broadcast_id"] = bid
+        y["live_chat_id"] = (body.get("snippet") or {}).get("liveChatId", "")
+        cls._save_cfg(cfg)
+        # Catégorie « Jeux vidéo » : l'API ne permet pas de choisir le jeu.
+        await cls._yt_api("PUT", "videos", params={"part": "snippet"},
+                          json_body={"id": bid, "snippet": {"title": title[:100],
+                                                            "categoryId": cls._YT_GAMING}})
+        return bid
+
+    @classmethod
+    async def _yt_end_broadcast(cls):
+        """Termine le live côté YouTube (l'arrêt auto prend sinon ~1 min)."""
+        bid = cls._yt_cfg().get("broadcast_id")
+        if not bid:
+            return
+        try:
+            await cls._yt_api("POST", "liveBroadcasts/transition",
+                              params={"part": "id", "id": bid, "broadcastStatus": "complete"})
+        except Exception:
+            pass
+        cfg = cls._load_cfg()
+        cls._yt_cfg(cfg).pop("broadcast_id", None)
+        cls._save_cfg(cfg)
+
+    @classmethod
+    def _yt_chat_source(cls, cfg=None):
+        """Chaîne dont l'overlay lit le chat : saisie manuelle, sinon sa propre
+        chaîne quand on est connecté (comme pour Twitch)."""
+        yt = (cfg if cfg is not None else cls._load_cfg()).get("youtube") or {}
+        return (yt.get("chat_channel") or yt.get("channel_id") or "").strip()
+
+    @classmethod
+    async def yt_send_chat(cls, message: str = ""):
+        """Message dans le chat de SON live YouTube (connexion requise)."""
+        message = (message or "").strip()
+        if not message:
+            return {"ok": False, "error": "empty"}
+        yt = cls._yt_cfg()
+        if not (yt.get("oauth") or {}).get("access_token"):
+            return {"ok": False, "error": "not_logged_in"}
+        chat_id = yt.get("live_chat_id")
+        if not chat_id or cls._stream_platform != "youtube":
+            return {"ok": False, "error": "not_live"}
+        st, body = await cls._yt_api(
+            "POST", "liveChat/messages", params={"part": "snippet"},
+            json_body={"snippet": {"liveChatId": chat_id, "type": "textMessageEvent",
+                                   "textMessageDetails": {"messageText": message[:200]}}})
+        if st in (200, 201):
+            return {"ok": True}
+        return {"ok": False, "error": cls._yt_error(body, st)}
+
+    @classmethod
+    async def yt_set_settings(cls, settings=None):
+        """Titre, visibilité, clé manuelle (chaîne vide = effacer la clé)."""
+        cfg = cls._load_cfg()
+        yt = cls._yt_cfg(cfg)
+        s = settings if isinstance(settings, dict) else {}
+        if isinstance(s.get("title"), str):
+            yt["title"] = s["title"].strip()[:100]
+        if s.get("privacy") in cls._YT_PRIVACY:
+            yt["privacy"] = s["privacy"]
+        if isinstance(s.get("chat_channel"), str):
+            yt["chat_channel"] = s["chat_channel"].strip()
+        if isinstance(s.get("key"), str):
+            k = s["key"].strip()
+            if k:
+                yt["key"] = k
+            else:
+                yt.pop("key", None)
+        cls._save_cfg(cfg)
+        title_live = False
+        # En direct : le titre part aussi sur le live en cours.
+        if "title" in s and cls._stream_platform == "youtube" and yt.get("broadcast_id") \
+                and (yt.get("oauth") or {}).get("access_token"):
+            st, _ = await cls._yt_api(
+                "PUT", "videos", params={"part": "snippet"},
+                json_body={"id": yt["broadcast_id"],
+                           "snippet": {"title": yt.get("title") or "BoneCast live",
+                                       "categoryId": cls._YT_GAMING}})
+            title_live = st == 200
+        return {"ok": True, "title_live": title_live}
+
     # ── Overlay chat ─────────────────────────────────────────────────────────
     @classmethod
-    def _overlay_state_dir(cls):
+    def _overlay_state_dir(cls, platform="twitch"):
         try:
             acc = bcenv.steam_account_id()
         except Exception:
             acc = "default"
-        return os.path.expanduser(f"~/.local/share/bonecast/twitch_overlay/{acc}")
+        sub = "youtube_overlay" if platform == "youtube" else "twitch_overlay"
+        return os.path.expanduser(f"~/.local/share/bonecast/{sub}/{acc}")
 
     @classmethod
-    def _write_overlay_state(cls, cfg=None):
+    def _overlay_holder(cls, cfg, platform):
+        """Réglages d'apparence : ceux de Twitch à la racine, ceux de YouTube à part."""
+        return cls._yt_cfg(cfg) if platform == "youtube" else cfg
+
+    @classmethod
+    def _write_overlay_state(cls, cfg=None, platform="twitch"):
         cfg = cls._load_cfg() if cfg is None else cfg
-        d = cls._overlay_state_dir()
+        d = cls._overlay_state_dir(platform)
         os.makedirs(d, exist_ok=True)
-        st = {**cls._OVERLAY_DEFAULTS, **(cfg.get("overlay") or {})}
+        st = {**cls._OVERLAY_DEFAULTS, **(cls._overlay_holder(cfg, platform).get("overlay") or {})}
         with open(os.path.join(d, "overlay_state.json"), "w") as f:
             dump(st, f)
 
@@ -520,36 +847,45 @@ class Plugin:
             return {"ok": False, "error": str(e)}
 
     @classmethod
-    async def set_overlay_settings(cls, settings=None):
+    async def set_overlay_settings(cls, settings=None, platform="twitch"):
         try:
             cfg = cls._load_cfg()
-            ov = {**cls._OVERLAY_DEFAULTS, **(cfg.get("overlay") or {})}
+            holder = cls._overlay_holder(cfg, platform)
+            ov = {**cls._OVERLAY_DEFAULTS, **(holder.get("overlay") or {})}
             for k in cls._OVERLAY_DEFAULTS:
                 if isinstance(settings, dict) and settings.get(k) is not None:
                     ov[k] = settings[k]
-            cfg["overlay"] = ov
+            holder["overlay"] = ov
             cls._save_cfg(cfg)
-            cls._write_overlay_state(cfg)   # poll live par chat.html
+            cls._write_overlay_state(cfg, platform)   # poll live par chat.html
             return {"ok": True, "overlay": ov}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
     @classmethod
-    async def start_overlay(cls):
+    async def start_overlay(cls, platform="twitch"):
+        platform = "youtube" if platform == "youtube" else "twitch"
+        if cls._overlay_proc is not None and cls._overlay_proc.returncode is None:
+            if cls._overlay_platform == platform:
+                return {"ok": True, "already": True}
+            return {"ok": False, "error": "busy", "platform": cls._overlay_platform}
         cfg = cls._load_cfg()
-        # Override manuel sinon = ta propre chaîne (login OAuth) → aucun pseudo à saisir.
-        channel = (cfg.get("channel") or (cfg.get("oauth") or {}).get("login") or "").strip()
+        if platform == "youtube":
+            channel = cls._yt_chat_source(cfg)
+            extra = ["--platform", "youtube", "--yt-source", channel]
+        else:
+            # Override manuel sinon = ta propre chaîne (login OAuth) → aucun pseudo à saisir.
+            channel = (cfg.get("channel") or (cfg.get("oauth") or {}).get("login") or "").strip()
+            extra = ["--channel", channel]
         if not channel:
             return {"ok": False, "error": "no_channel"}
-        if cls._overlay_proc is not None and cls._overlay_proc.returncode is None:
-            return {"ok": True, "already": True}
         from asyncio import create_subprocess_exec
         from subprocess import PIPE
         script = Path(DECKY_PLUGIN_DIR) / "twitch_overlay" / "overlay.py"
         if not script.exists():
             script = Path(DECKY_PLUGIN_DIR) / "defaults" / "twitch_overlay" / "overlay.py"
-        d = cls._overlay_state_dir()
-        cls._write_overlay_state(cfg)
+        d = cls._overlay_state_dir(platform)
+        cls._write_overlay_state(cfg, platform)
         try:
             # Base = user_env() DIRECTEMENT (pas de .update() sur os.environ :
             # update ne peut pas RETIRER le LD_LIBRARY_PATH PyInstaller, et ce
@@ -566,12 +902,12 @@ class Plugin:
                 pass
             env.setdefault("DISPLAY", ":0")     # XWayland gamescope (over-game) ou KWin
             cls._overlay_proc = await create_subprocess_exec(
-                "/usr/bin/python3", str(script),
-                "--channel", channel, "--state-dir", d,
+                "/usr/bin/python3", str(script), *extra, "--state-dir", d,
                 env=env, stdout=PIPE, stderr=PIPE)
+            cls._overlay_platform = platform
             create_task(stream_watcher(cls._overlay_proc.stdout, prefix="[overlay]"))
             create_task(stream_watcher(cls._overlay_proc.stderr, True, prefix="[overlay]"))
-            logger.info(f"[overlay] démarré (#{channel})")
+            logger.info(f"[overlay] démarré ({platform}: {channel})")
             return {"ok": True}
         except Exception as e:
             logger.warning(f"[overlay] start failed: {e!r}")
@@ -581,6 +917,7 @@ class Plugin:
     async def stop_overlay(cls):
         proc = cls._overlay_proc
         cls._overlay_proc = None
+        cls._overlay_platform = None
         if proc is not None and proc.returncode is None:
             try:
                 proc.terminate()
@@ -596,7 +933,8 @@ class Plugin:
     @classmethod
     async def get_overlay_status(cls):
         ov = cls._overlay_proc
-        return {"overlay_on": ov is not None and ov.returncode is None}
+        on = ov is not None and ov.returncode is None
+        return {"overlay_on": on, "platform": cls._overlay_platform if on else None}
 
     # ── Visionnage Twitch : helper GTK/Cairo au-dessus de gamescope ─────────
     @classmethod
@@ -866,15 +1204,17 @@ class Plugin:
                 "recommended": rec}
 
     @classmethod
-    async def set_stream_settings(cls, settings=None):
-        """Persiste les réglages de qualité/encodeur (par compte)."""
+    async def set_stream_settings(cls, settings=None, platform="twitch"):
+        """Persiste les réglages de qualité/encodeur (par compte ET par plateforme :
+        Twitch et YouTube ont chacun les leurs, rien n'est partagé entre eux)."""
         cfg = cls._load_cfg()
-        st = {**cls._STREAM_DEFAULTS, **(cfg.get("stream") or {})}
+        holder = cls._yt_cfg(cfg) if platform == "youtube" else cfg
+        st = {**cls._STREAM_DEFAULTS, **(holder.get("stream") or {})}
         if isinstance(settings, dict):
             for k in cls._STREAM_DEFAULTS:
                 if settings.get(k) is not None:
                     st[k] = settings[k]
-        cfg["stream"] = st
+        holder["stream"] = st
         cls._save_cfg(cfg)
         return {"ok": True, "stream": st}
 
@@ -1075,7 +1415,7 @@ class Plugin:
                 "v4l2loopback video_nr=42 card_label=BoneCast exclusive_caps=1")
 
     @classmethod
-    async def start_stream(cls, record_only=False):
+    async def start_stream(cls, record_only=False, platform="twitch"):
         from asyncio import create_subprocess_exec, sleep
         from subprocess import PIPE
         import shutil as _sh
@@ -1084,9 +1424,20 @@ class Plugin:
         if not _sh.which("ffmpeg"):
             return {"ok": False, "error": "no_ffmpeg",
                     "hint": cls._pkg_hint("ffmpeg", "ffmpeg", "ffmpeg")}
+        platform = "youtube" if platform == "youtube" else "twitch"
+        want = "record" if record_only else platform
+        # UN seul live à la fois : c'est le même ffmpeg, la même capture et le
+        # même micro. Lancer YouTube pendant un live Twitch (ou l'inverse) est
+        # refusé, jamais un second encodage en parallèle.
+        if cls._stream_proc is not None and cls._stream_proc.returncode is None:
+            if cls._stream_platform == want:
+                return {"ok": True, "already": True}
+            return {"ok": False, "error": "busy", "platform": cls._stream_platform}
         cfg = cls._load_cfg()
         key = None
-        if not record_only:
+        ingest = None
+        yt_broadcast = False
+        if not record_only and platform == "twitch":
             # Connecté en OAuth → rafraîchit la clé (elle peut tourner) avant de passer live.
             if (cfg.get("oauth") or {}).get("access_token"):
                 try:
@@ -1097,8 +1448,24 @@ class Plugin:
             key = cfg.get("key")
             if not key:
                 return {"ok": False, "error": "no_key"}
-        if cls._stream_proc is not None and cls._stream_proc.returncode is None:
-            return {"ok": True, "already": True}
+            ingest = cfg.get("ingest") or cls._TWITCH_INGEST
+        elif not record_only:
+            yt = cfg.get("youtube") or {}
+            if (yt.get("oauth") or {}).get("access_token"):
+                # Connecté : flux réutilisable + un live créé à chaque passage
+                # à l'antenne (titre, visibilité, démarrage automatique).
+                try:
+                    key, ingest = await cls._yt_ensure_stream()
+                    await cls._yt_create_broadcast()
+                    yt_broadcast = True
+                except Exception as e:
+                    logger.warning(f"[youtube] préparation du live: {e!r}")
+                    return {"ok": False, "error": "yt_api", "hint": str(e)}
+            else:
+                key = yt.get("key")
+                ingest = yt.get("ingest") or cls._YT_INGEST
+            if not key:
+                return {"ok": False, "error": "no_yt_key"}
         if not os.path.exists("/dev/video42"):
             return {"ok": False, "error": "no_loopback",
                     "hint": await cls._v4l2_hint()}
@@ -1112,8 +1479,8 @@ class Plugin:
                 return {"ok": False, "error": "no_loopback",
                         "hint": await cls._v4l2_hint()}
             await sleep(1)
-        ingest = cfg.get("ingest") or cls._TWITCH_INGEST
-        st = {**cls._STREAM_DEFAULTS, **(cfg.get("stream") or {})}
+        holder = (cfg.get("youtube") or {}) if platform == "youtube" else cfg
+        st = {**cls._STREAM_DEFAULTS, **(holder.get("stream") or {})}
         discord_on = bool(st.get("discord_audio"))
         # Pont audio Discord : si Steamcord présent, isole Vesktop dans son sink
         # → le sink par défaut ne contient plus que le jeu ; le monitor Discord
@@ -1233,13 +1600,32 @@ class Plugin:
             if mic_src:
                 cls._mic_active = True
                 create_task(cls._discover_mic_so(mic_src, cls._stream_proc.pid))
-            logger.info("[stream] live démarré vers Twitch")
+            cls._stream_platform = want
+            logger.info(f"[stream] démarré : {want}")
             return {"ok": True}
         except Exception as e:
             logger.warning(f"[stream] start failed: {e!r}")
             await cls._audio_bridge_stop()       # ne pas laisser Vesktop déplacé
             cls._reset_mic_state()
+            if yt_broadcast:
+                await cls._yt_end_broadcast()    # pas de live YouTube fantôme
             return {"ok": False, "error": str(e)}
+
+    @classmethod
+    async def _watch_stream_exit(cls, proc):
+        """ffmpeg s'arrête SANS stop_stream (réseau coupé, clé refusée…) : on
+        range comme un arrêt normal, sinon capture, pont audio et live YouTube
+        resteraient ouverts. Était appelé depuis le premier commit sans avoir
+        jamais été écrit : le démarrage levait une erreur APRÈS avoir lancé
+        ffmpeg, et le QAM affichait un échec alors que le live tournait."""
+        try:
+            await proc.wait()
+        except Exception:
+            return
+        if cls._stream_proc is not proc:
+            return                               # arrêt demandé : stop_stream s'en charge
+        logger.warning(f"[stream] ffmpeg s'est arrêté seul (code {proc.returncode})")
+        await cls.stop_stream()
 
     @classmethod
     async def _discover_mic_so(cls, mic_src, pid):
@@ -1377,6 +1763,8 @@ class Plugin:
         from asyncio import wait_for
         proc = cls._stream_proc
         cls._stream_proc = None
+        was = cls._stream_platform
+        cls._stream_platform = None
         if proc is not None and proc.returncode is None:
             try:
                 # SIGINT = ffmpeg ferme la session RTMP proprement (FCUnpublish) →
@@ -1399,6 +1787,8 @@ class Plugin:
         await cls._stop_camera_feeder()
         await cls._audio_bridge_stop()           # remet Vesktop sur la vraie sortie
         cls._reset_mic_state()
+        if was == "youtube" and (cls._yt_cfg().get("oauth") or {}).get("access_token"):
+            await cls._yt_end_broadcast()
         rec = cls._record_path
         cls._record_path = None
         cls._record_only = False
@@ -1412,7 +1802,8 @@ class Plugin:
         if not live:
             cls._reset_mic_state()
         brb = cls._brb_proc is not None and cls._brb_proc.returncode is None
-        return {"streaming": live, "mic": live and cls._mic_active,
+        return {"streaming": live, "platform": cls._stream_platform if live else None,
+                "mic": live and cls._mic_active,
                 "mic_muted": cls._mic_muted, "brb": live and brb,
                 "record_path": cls._record_path if live else None,
                 "record_only": live and cls._record_only}

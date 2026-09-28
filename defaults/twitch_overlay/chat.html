@@ -301,8 +301,35 @@ if (CFG.stateUrl) {
   }, 1200);
 }
 
-sys("connexion au chat de #" + CFG.channel + " …");
-connect();
+// ── YouTube : pas d'IRC, les messages arrivent de yt_chat.py (overlay.py). ──
+const YT_COLORS = { owner: "#ffd600", moderator: "#5e84f1", member: "#2ba640", verified: "#aaaaaa" };
+function addYtMessage(m) {
+  const el = document.createElement("div"); el.className = "m";
+  const color = YT_COLORS[m.badge] || "#c8c8c8";
+  let body = "";
+  (m.runs || []).forEach(r => {
+    if (r.img) body += `<img class="e" src="${esc(r.img)}" loading="lazy" title="${esc(r.alt || "")}">`;
+    else body += esc(r.t || "");
+  });
+  const amount = m.amount ? `<span class="u" style="color:#ffca28">${esc(m.amount)} </span>` : "";
+  el.innerHTML = amount + `<span class="u" style="color:${color}">${esc(m.name || "")}</span><span class="sep">: </span>` + body;
+  log.appendChild(el); trim();
+}
+window.bcYt = {
+  push(msgs) { dot.classList.add("on"); (msgs || []).forEach(addYtMessage); },
+  status(state, detail) {
+    if (state === "live") { dot.classList.add("on"); sys("chat YouTube connecté"); }
+    else if (state === "waiting") { dot.classList.remove("on"); sys("en attente du live YouTube…"); }
+    else { dot.classList.remove("on"); sys("reconnexion au chat YouTube…"); }
+  },
+};
+
+if (CFG.platform === "youtube") {
+  sys("connexion au chat YouTube de " + (CFG.ytSource || "?") + " …");
+} else {
+  sys("connexion au chat de #" + CFG.channel + " …");
+  connect();
+}
 </script>
 </body>
 </html>
