@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.1 — 2026-09-29
+
+### Going live works on a stock Steam Deck
+
+Reported in [#1](https://github.com/Necrosiak/BoneCast/issues/1).
+
+- **No more virtual camera.** BoneCast used to pass the game image to the
+  encoder through a virtual video device (`/dev/video42`), which needs the
+  `v4l2loopback` kernel module. SteamOS doesn't load it, and loading it needs
+  `sudo`, so on a stock Steam Deck neither Twitch nor YouTube could go live.
+  The capture now hands its frames straight to ffmpeg through a pipe: nothing to
+  install, no `sudo`, on any Linux.
+- **A steady 30 frames per second.** gamescope sends no image while the screen
+  doesn't change (a paused menu, a loading screen). The stream then got no video
+  at all, and stopping it could hang for seconds and leave an unreadable
+  recording. BoneCast now repeats the last image, so the stream never starves
+  and stops in a fraction of a second.
+- **The pause screen (BRB)** is drawn by the capture itself, with no second
+  encoder. It looks the same and switches instantly both ways.
+- **Setup hints are in English**, and BoneCast no longer suggests
+  `sudo pacman` on SteamOS, whose system is read-only.
+
+### Fix
+
+- Stopping a BoneCast stream also killed Steamcord's screen capture, which has
+  the same file name. BoneCast now only stops its own.
+
 ## 0.4.0 — 2026-09-28
 
 ### YouTube, next to Twitch

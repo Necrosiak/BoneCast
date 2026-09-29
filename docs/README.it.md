@@ -37,7 +37,7 @@ BoneCast mette tutto il necessario per trasmettere su **Twitch** direttamente ne
 Twitch non ha un'API di push video, quindi andare in diretta significa sempre un **push RTMP** dietro le quinte. BoneCast se ne occupa per te:
 
 1. Il **flusso OAuth con codice dispositivo** ti connette a Twitch e recupera chiave di trasmissione, titolo e categoria tramite l'API Helix — non tocchi mai la chiave.
-2. L'immagine del gioco viene catturata da **gamescope** verso un dispositivo di loopback `v4l2`, e **ffmpeg** la codifica (hardware quando disponibile, `libx264` software altrimenti) e la invia a `rtmp://…/<la-tua-chiave>`.
+2. L'immagine del gioco viene catturata da **gamescope** e passata direttamente a **ffmpeg** tramite una pipe (nessuna videocamera virtuale, niente da installare), che la codifica (hardware quando disponibile, `libx264` software altrimenti) e la invia a `rtmp://…/<la-tua-chiave>`.
 3. L'**overlay della chat** è una superficie WebKit trasparente promossa sul piano external-overlay di gamescope, che legge l'IRC di Twitch in forma anonima e mostra le emote.
 
 Tutto si controlla dal QAM e sopravvive ai riavvii.
@@ -66,7 +66,7 @@ BoneCast **si aggiorna automaticamente** dalle Releases di GitHub (disattivabile
 
 BoneCast punta a **tutte le distribuzioni Linux** in grado di eseguire Steam in
 Modalità Gioco / Big Picture: una sola build, rilevamento a runtime di tutto
-ciò che è esterno (ffmpeg, libx264, v4l2loopback, GStreamer), e il comando di
+ciò che è esterno (ffmpeg, libx264, GStreamer), e il comando di
 installazione esatto per il tuo gestore di pacchetti mostrato nel QAM quando
 manca qualcosa. Note sui pacchetti per distribuzione: [OS-NOTES.md](OS-NOTES.md).
 

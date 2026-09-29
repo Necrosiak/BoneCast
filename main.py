@@ -115,7 +115,7 @@ class Plugin:
     _watch_start_lock = None                    # évite deux starts QAM simultanés
     _stream_proc = None                        # ffmpeg RTMP (live Twitch ou YouTube)
     _stream_platform = None                    # "twitch" | "youtube" | "record" (un seul à la fois)
-    _camera_feeder = None                      # gst_camera.py → /dev/video42
+    _camera_feeder = None                      # gst_camera.py --stdout → tuyau → ffmpeg
     _TWITCH_INGEST = "rtmp://ingest.global-contribute.live-video.net/app"
     _OVERLAY_DEFAULTS = {"opacity": 62, "fontSize": 13, "width": 360,
                          "height": 460, "pos": "tr", "badges": True, "thirdParty": True}
@@ -137,7 +137,7 @@ class Plugin:
     _mic_so_idx = None                         # source-output ffmpeg qui capte le micro
     _mic_muted = False                         # micro coupé sur le stream (live)
     # ── BRB (pause à l'antenne) + enregistrement local ────────────────────────
-    _brb_proc = None                           # writer ffmpeg lavfi → /dev/video42
+    _brb_on = False                            # écran pause affiché par le feeder (SIGUSR1/2)
     _brb_restore_mic = False                   # micro auto-muté par le BRB → à rétablir
     _record_path = None                        # fichier mkv du live/enregistrement courant
     _record_only = False                       # session sans RTMP (enregistrement seul)
@@ -1045,8 +1045,8 @@ class Plugin:
                     pass
         return {"ok": True}
 
-    # ── Streaming Twitch (RTMP via ffmpeg depuis la capture /dev/video42) ─────
-    # Le jeu est capturé dans le loopback v4l2 /dev/video42 par gst_camera.py
+    # ── Streaming (RTMP via ffmpeg, images du jeu par un tuyau) ────────────────
+    # Le jeu est capturé par gst_camera.py --stdout, qui écrit dans un tuyau lu par ffmpeg
     # (node PipeWire gamescope → seul chemin qui marche en mode jeu, gamescope
     # n'ayant pas de portail) ; ffmpeg le lit + le son du jeu (monitor du sink
     # par défaut), encode h264/aac et pousse en RTMP vers Twitch avec la clé
@@ -1182,7 +1182,7 @@ class Plugin:
                 return None
         except Exception:
             pass
-        return ("bindings GStreamer/PipeWire manquants pour la capture : "
+        return ("GStreamer/PipeWire Python bindings missing for the game capture: "
                 + cls._pkg_hint("python-gobject gst-plugin-pipewire",
                                 "python3-gobject pipewire-gstreamer",
                                 "python3-gi gir1.2-gstreamer-1.0 gstreamer1.0-pipewire"))
@@ -1332,45 +1332,43 @@ class Plugin:
         cls._ba_real_sink = None
 
     @classmethod
-    async def _start_camera_feeder(cls):
-        """(Re)lance gst_camera.py qui alimente /dev/video42 avec l'écran gamescope."""
-        from asyncio import create_subprocess_exec, sleep
+    async def _start_camera_feeder(cls, out_fd):
+        """Lance gst_camera.py --stdout : il capture l'écran gamescope et écrit
+        les images brutes (YUY2 1280x720@30) dans `out_fd`, un tuyau dont ffmpeg
+        lit l'autre bout. Plus de /dev/video42 : v4l2loopback n'est pas chargé
+        sur SteamOS et le charger demande sudo (BoneCast #1)."""
+        from asyncio import create_subprocess_exec
         from subprocess import PIPE, DEVNULL
-        if not os.path.exists("/dev/video42"):
-            logger.warning("[stream] /dev/video42 absent — v4l2loopback non chargé.")
-            return False
-        try:
-            killer = await create_subprocess_exec(
-                "pkill", "-f", "gst_camera.py",
-                stdout=DEVNULL, stderr=DEVNULL, env=bcenv.user_env())
-            await killer.wait()
-            await sleep(0.5)
-        except Exception:
-            pass
+        await cls._stop_camera_feeder()
+        cls._camera_feeder = await create_subprocess_exec(
+            sys_python(), str(cls._feeder_script()), "--stdout",
+            env=cls._gst_environment(), stdin=DEVNULL, stdout=out_fd, stderr=PIPE)
+        create_task(stream_watcher(cls._camera_feeder.stderr, True, prefix="[gstcam]"))
+        return True
+
+    @staticmethod
+    def _feeder_script():
         script = Path(DECKY_PLUGIN_DIR) / "gst_camera.py"
         if not script.exists():
             script = Path(DECKY_PLUGIN_DIR) / "defaults" / "gst_camera.py"
-        cls._camera_feeder = await create_subprocess_exec(
-            sys_python(), str(script),
-            env=cls._gst_environment(), stdout=PIPE, stderr=PIPE)
-        create_task(stream_watcher(cls._camera_feeder.stdout, prefix="[gstcam]"))
-        create_task(stream_watcher(cls._camera_feeder.stderr, True, prefix="[gstcam]"))
-        await sleep(2)     # laisser le pipeline s'établir
-        return True
+        return script
 
     @classmethod
     async def _stop_camera_feeder(cls):
+        # pkill ciblé sur NOTRE script : un « pkill -f gst_camera.py » tuait aussi
+        # le feeder de Steamcord (même nom de fichier, autre plugin).
         from asyncio import create_subprocess_exec
         from subprocess import DEVNULL
         try:
             killer = await create_subprocess_exec(
-                "pkill", "-f", "gst_camera.py",
+                "pkill", "-f", str(cls._feeder_script()),
                 stdout=DEVNULL, stderr=DEVNULL, env=bcenv.user_env())
             await killer.wait()
         except Exception:
             pass
         fd = cls._camera_feeder
         cls._camera_feeder = None
+        cls._brb_on = False
         if fd is not None:
             try:
                 fd.kill()
@@ -1382,7 +1380,18 @@ class Plugin:
     # Le plugin vérifie ce que la machine a et dit exactement quoi installer.
     @staticmethod
     def _pkg_hint(arch, fedora, debian):
+        """Commande d'installation pour CET OS — en anglais : ces textes vont tels
+        quels dans le QAM (BoneCast #1 : un Deck en anglais recevait du français)."""
         import shutil as _sh
+        # SteamOS a pacman mais un système en lecture seule : proposer
+        # « sudo pacman -S » y est au mieux inutile, au pire dangereux.
+        try:
+            with open("/etc/os-release") as f:
+                if "ID=steamos" in f.read():
+                    return (f"missing on this SteamOS install ({arch}) — SteamOS is read-only, "
+                            "please report it on the BoneCast GitHub issues")
+        except OSError:
+            pass
         if _sh.which("pacman"):
             return f"sudo pacman -S {arch}"
         if _sh.which("rpm-ostree"):
@@ -1394,25 +1403,6 @@ class Plugin:
         if _sh.which("apt"):
             return f"sudo apt install {debian}"
         return f"install: {arch}"
-
-    @classmethod
-    async def _v4l2_hint(cls):
-        """Distingue « module pas installé » (installer le paquet) de « installé
-        mais pas chargé » (modprobe/reboot) pour donner LA bonne commande."""
-        from asyncio import create_subprocess_exec
-        from subprocess import DEVNULL
-        try:
-            p = await create_subprocess_exec("modinfo", "v4l2loopback",
-                                             stdout=DEVNULL, stderr=DEVNULL)
-            installed = (await p.wait()) == 0
-        except Exception:
-            installed = False
-        if installed:
-            return ("v4l2loopback installé mais pas chargé : sudo modprobe v4l2loopback "
-                    "video_nr=42 card_label=BoneCast exclusive_caps=1 (puis réessaie)")
-        pkg = cls._pkg_hint("v4l2loopback-dkms", "v4l2loopback", "v4l2loopback-dkms")
-        return (f"module v4l2loopback manquant : {pkg} puis sudo modprobe "
-                "v4l2loopback video_nr=42 card_label=BoneCast exclusive_caps=1")
 
     @classmethod
     async def start_stream(cls, record_only=False, platform="twitch"):
@@ -1466,19 +1456,9 @@ class Plugin:
                 ingest = yt.get("ingest") or cls._YT_INGEST
             if not key:
                 return {"ok": False, "error": "no_yt_key"}
-        if not os.path.exists("/dev/video42"):
-            return {"ok": False, "error": "no_loopback",
-                    "hint": await cls._v4l2_hint()}
         gst_hint = await cls._gst_python_hint()
         if gst_hint:
             return {"ok": False, "error": "no_gst", "hint": gst_hint}
-        # S'assurer que la capture jeu alimente /dev/video42.
-        if not (cls._camera_feeder is not None
-                and cls._camera_feeder.returncode is None):
-            if not await cls._start_camera_feeder():
-                return {"ok": False, "error": "no_loopback",
-                        "hint": await cls._v4l2_hint()}
-            await sleep(1)
         holder = (cfg.get("youtube") or {}) if platform == "youtube" else cfg
         st = {**cls._STREAM_DEFAULTS, **(holder.get("stream") or {})}
         discord_on = bool(st.get("discord_audio"))
@@ -1515,14 +1495,20 @@ class Plugin:
         # (le ffmpeg-free de Fedora ne l'a pas → erreur claire, pas un crash).
         if enc == "software" and not await cls._x264_available():
             return {"ok": False, "error": "no_x264",
-                    "hint": "ce ffmpeg n'a pas libx264 (ffmpeg-free de Fedora ?) — "
-                            "installe le ffmpeg complet (Fedora : active RPM Fusion puis "
+                    "hint": "this ffmpeg has no libx264 (Fedora's ffmpeg-free?) — "
+                            "install the full ffmpeg (Fedora: enable RPM Fusion, then "
                             "sudo dnf swap ffmpeg-free ffmpeg --allowerasing)"}
-        # Entrées : vidéo (loopback jeu) + son du jeu (idx 1) + micro + Discord.
+        # Entrées : vidéo (tuyau du feeder) + son du jeu (idx 1) + micro + Discord.
         # thread_queue_size + genpts = tampons plus larges + PTS régénérés →
         # évite les « backward in time »/underruns qui font tomber le RTMP.
+        # Vidéo : images brutes du feeder par un tuyau (stdin de ffmpeg).
+        # Horodatées à la RÉCEPTION : gamescope n'envoie une image que quand
+        # l'écran change, et des horodatages « au compteur » comprimeraient le
+        # temps (vidéo en avance sur le son) ; le filtre fps= comble ensuite.
         args = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-fflags", "+genpts",
-                "-thread_queue_size", "512", "-f", "v4l2", "-i", "/dev/video42",
+                "-thread_queue_size", "512", "-use_wallclock_as_timestamps", "1",
+                "-f", "rawvideo", "-pix_fmt", "yuyv422", "-video_size", "1280x720",
+                "-framerate", "30", "-i", "pipe:0",
                 "-thread_queue_size", "512", "-f", "pulse", "-i", mon]
         audio_idx = [1]                       # entrées audio à mixer (1 = jeu)
         nxt = 2
@@ -1589,9 +1575,16 @@ class Plugin:
         logger.info(f"[stream] encodeur={enc} {w or 'source'}x{h or ''}@{fps} "
                     f"{vb}kbps mic={bool(mic_src)} discord={bool(discord_on and disc_mon)} "
                     f"record={cls._record_path or '-'} record_only={record_only}")
+        rfd, wfd = os.pipe()
         try:
+            # ffmpeg d'abord (il lit le bout de lecture), puis le feeder qui
+            # écrit dans l'autre bout ; le parent ferme ses deux copies ensuite,
+            # sinon ffmpeg ne verrait jamais la fin du flux.
             cls._stream_proc = await create_subprocess_exec(
-                *args, stdout=PIPE, stderr=PIPE, env=bcenv.user_env())
+                *args, stdin=rfd, stdout=PIPE, stderr=PIPE, env=bcenv.user_env())
+            await cls._start_camera_feeder(wfd)
+            os.close(rfd); os.close(wfd)
+            rfd = wfd = None
             create_task(stream_watcher(cls._stream_proc.stdout, prefix="[stream]"))
             create_task(stream_watcher(cls._stream_proc.stderr, True, prefix="[stream]"))
             create_task(cls._watch_stream_exit(cls._stream_proc))
@@ -1605,6 +1598,16 @@ class Plugin:
             return {"ok": True}
         except Exception as e:
             logger.warning(f"[stream] start failed: {e!r}")
+            for fdx in (rfd, wfd):
+                if fdx is not None:
+                    try:
+                        os.close(fdx)
+                    except OSError:
+                        pass
+            if cls._stream_proc is not None and cls._stream_proc.returncode is None:
+                cls._stream_proc.kill()
+            cls._stream_proc = None
+            await cls._stop_camera_feeder()
             await cls._audio_bridge_stop()       # ne pas laisser Vesktop déplacé
             cls._reset_mic_state()
             if yt_broadcast:
@@ -1703,35 +1706,27 @@ class Plugin:
         return os.path.join(cls._videos_dir(), name)
 
     # ── BRB : pause à l'antenne sans couper le live ────────────────────────────
-    # Le ffmpeg du live lit /dev/video42 en continu ; pour « passer en pause »
-    # on remplace juste ce qui ALIMENTE le device : le feeder gst est tué et un
-    # petit ffmpeg lavfi pousse un écran sombre avec un symbole pause (drawbox
-    # pur = zéro dépendance fonts). Même format que gst_camera.py (YUYV 720p30),
-    # sinon le lecteur décroche. Au retour, on relance le feeder normal.
+    # Le feeder remplace lui-même les images du jeu par une image de pause (fond
+    # sombre, deux barres) sur SIGUSR1, et reprend sur SIGUSR2 : le tuyau vers
+    # ffmpeg ne s'interrompt jamais, donc le live ne décroche pas.
     @classmethod
     async def brb_start(cls):
-        from asyncio import create_subprocess_exec, sleep
-        from subprocess import PIPE, DEVNULL
+        """Écran pause à l'antenne : le feeder remplace les images du jeu par
+        l'image de pause (SIGUSR1) ; le live continue sans coupure."""
+        import signal as _sig
         if cls._stream_proc is None or cls._stream_proc.returncode is not None:
             return {"ok": False, "error": "not_streaming"}
-        if cls._brb_proc is not None and cls._brb_proc.returncode is None:
+        if cls._brb_on:
             return {"ok": True, "already": True}
-        await cls._stop_camera_feeder()
-        await sleep(0.3)
-        bars = ("drawbox=x=iw/2-70:y=ih/2-90:w=50:h=180:color=white@0.85:t=fill,"
-                "drawbox=x=iw/2+20:y=ih/2-90:w=50:h=180:color=white@0.85:t=fill")
+        feeder = cls._camera_feeder
+        if feeder is None or feeder.returncode is not None:
+            return {"ok": False, "error": "no_feeder"}
         try:
-            cls._brb_proc = await create_subprocess_exec(
-                "ffmpeg", "-hide_banner", "-loglevel", "warning", "-re",
-                "-f", "lavfi", "-i", "color=c=0x18181B:size=1280x720:rate=30",
-                "-vf", bars, "-pix_fmt", "yuyv422",
-                "-f", "v4l2", "/dev/video42",
-                stdout=DEVNULL, stderr=PIPE, env=bcenv.user_env())
-            create_task(stream_watcher(cls._brb_proc.stderr, True, prefix="[brb]"))
+            feeder.send_signal(_sig.SIGUSR1)
         except Exception as e:
             logger.warning(f"[brb] start failed: {e!r}")
-            await cls._start_camera_feeder()
             return {"ok": False, "error": str(e)}
+        cls._brb_on = True
         # micro coupé pendant la pause (rétabli au retour s'il était ouvert)
         cls._brb_restore_mic = cls._mic_active and not cls._mic_muted
         if cls._brb_restore_mic:
@@ -1741,20 +1736,20 @@ class Plugin:
 
     @classmethod
     async def brb_stop(cls):
-        proc = cls._brb_proc
-        cls._brb_proc = None
-        if proc is not None and proc.returncode is None:
+        import signal as _sig
+        was = cls._brb_on
+        cls._brb_on = False
+        feeder = cls._camera_feeder
+        if was and feeder is not None and feeder.returncode is None:
             try:
-                proc.terminate()
-                await proc.wait()
+                feeder.send_signal(_sig.SIGUSR2)
             except Exception:
                 pass
-        if cls._stream_proc is not None and cls._stream_proc.returncode is None:
-            await cls._start_camera_feeder()
         if cls._brb_restore_mic:
             cls._brb_restore_mic = False
             await cls.set_mic_mute(False)
-        logger.info("[brb] retour à l'antenne")
+        if was:
+            logger.info("[brb] retour à l'antenne")
         return {"ok": True}
 
     @classmethod
@@ -1801,7 +1796,7 @@ class Plugin:
         live = p is not None and p.returncode is None
         if not live:
             cls._reset_mic_state()
-        brb = cls._brb_proc is not None and cls._brb_proc.returncode is None
+        brb = cls._brb_on
         return {"streaming": live, "platform": cls._stream_platform if live else None,
                 "mic": live and cls._mic_active,
                 "mic_muted": cls._mic_muted, "brb": live and brb,

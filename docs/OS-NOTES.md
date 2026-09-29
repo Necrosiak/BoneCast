@@ -25,28 +25,13 @@ before going live and tells you; the RPM Fusion swap above fixes it.
 Hardware encoders (**NVENC** on Nvidia, **VAAPI** on AMD/Intel) are probed
 automatically and preferred when they actually work on your GPU.
 
-## Virtual camera (game capture)
+## Game capture: no virtual camera needed
 
-Same mechanism as Steamcord — the `v4l2loopback` kernel module feeds
-`/dev/video42`:
-
-| Distro | Command |
-|---|---|
-| Arch / CachyOS | `sudo pacman -S v4l2loopback-dkms` |
-| Fedora | `sudo dnf install v4l2loopback` (RPM Fusion: `akmod-v4l2loopback`) |
-| Bazzite | preinstalled |
-| Debian / Ubuntu | `sudo apt install v4l2loopback-dkms` |
-| openSUSE | `sudo zypper install v4l2loopback` |
-
-Configuration (one-time, shared with Steamcord if you use both — one module,
-one device):
-
-```bash
-# /etc/modprobe.d/v4l2loopback.conf
-options v4l2loopback exclusive_caps=1 card_label="BoneCast" video_nr=42
-# /etc/modules-load.d/v4l2loopback.conf
-v4l2loopback
-```
+Since v0.4.1 the capture feeder hands the game frames straight to ffmpeg
+through a pipe. The `v4l2loopback` module and `/dev/video42` are **no longer
+used**: nothing to install or load, and no `sudo` (SteamOS doesn't load that
+module, and loading it needs root). If you had set it up only for BoneCast, you
+can remove it; Steamcord still uses it for its Gaming Mode camera fallback.
 
 ## GStreamer bindings (capture pipeline)
 

@@ -241,7 +241,6 @@ function StreamControls({ platform, color, ready, beforeStart, clip }: {
     : r?.error === "no_key" ? t("err_no_key")
     : r?.error === "no_yt_key" ? t("err_no_yt_key")
     : r?.error === "yt_api" ? "⚠️ YouTube : " + (r?.hint || t("err_live_failed"))
-    : r?.error === "no_loopback" ? "⚠️ " + (r?.hint || t("hint_no_loopback"))
     : r?.error === "no_ffmpeg" ? "⚠️ " + (r?.hint || t("hint_no_ffmpeg"))
     : r?.error === "no_x264" ? "⚠️ " + (r?.hint || t("hint_no_x264"))
     : r?.error === "no_gst" ? "⚠️ " + (r?.hint || t("hint_no_gst"))

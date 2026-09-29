@@ -1,5 +1,11 @@
 #!/usr/bin/env python
-# Feeder « webcam virtuelle » : capture l'écran gamescope (node PipeWire direct —
+# BoneCast : lancé avec --stdout, ce feeder écrit ses images brutes (YUY2
+# 1280x720@30) sur sa sortie standard, reliée par un tuyau à l'entrée de ffmpeg.
+# Plus de /dev/video42 : le module v4l2loopback n'est pas chargé sur SteamOS
+# (BoneCast #1, Steam Deck OLED) et le charger exige sudo. L'écran pause (BRB)
+# est alors fabriqué ici : SIGUSR1 = pause, SIGUSR2 = retour au jeu.
+#
+# Mode historique (sans --stdout) : feeder « webcam virtuelle » : capture l'écran gamescope (node PipeWire direct —
 # le SEUL chemin qui marche en mode jeu, gamescope n'ayant pas de portail) et le
 # pousse dans /dev/video42 (v4l2loopback "Steamcord Screen"). Discord l'utilise
 # ensuite comme CAMÉRA (getUserMedia), ce qui contourne entièrement le partage
@@ -11,15 +17,25 @@
 
 import fcntl
 import os
+import signal
 import struct
 import sys
+import threading
 import time
 import json
 import logging
 from subprocess import getoutput, run, TimeoutExpired
 from gi import require_version  # type: ignore
 
-logging.basicConfig(level=logging.INFO, stream=sys.stdout,
+STDOUT_MODE = "--stdout" in sys.argv
+OUT_FD = None
+if STDOUT_MODE:
+    # La sortie standard ne transporte plus que des images : on la garde sur un
+    # fd à part et on renvoie le fd 1 vers stderr, pour qu'un print ou un
+    # message de bibliothèque ne puisse jamais s'intercaler dans une image.
+    OUT_FD = os.dup(1)
+    os.dup2(2, 1)
+logging.basicConfig(level=logging.INFO, stream=sys.stderr if STDOUT_MODE else sys.stdout,
                     format="%(levelname)s %(name)s: %(message)s", force=True)
 log = logging.getLogger("screencam")
 
@@ -59,6 +75,89 @@ def open_device_out():
         os.close(fd)
         raise
     return fd
+
+
+# ── Sortie tuyau + écran pause (mode --stdout) ─────────────────────────────
+_write_lock = threading.Lock()   # une image entière à la fois (pause vs capture)
+BRB = {"on": False}
+
+
+def write_frame(fd, data):
+    """Écrit UNE image complète. Sur un tuyau, os.write peut n'en passer qu'une
+    partie : sans cette boucle, ffmpeg recevrait des images décalées."""
+    view = memoryview(data)
+    with _write_lock:
+        while view:
+            n = os.write(fd, view)
+            view = view[n:]
+
+
+def _pause_frame():
+    """Image de pause en YUY2 : fond sombre et deux barres blanches centrées,
+    la même que l'ancien écran pause dessiné par ffmpeg."""
+    bg_y, bar_y, chroma = 37, 205, 128
+    row_bg = bytes([bg_y, chroma, bg_y, chroma]) * (WIDTH // 2)
+    row_bar = bytearray(row_bg)
+    for x0 in (WIDTH // 2 - 70, WIDTH // 2 + 20):
+        for x in range(x0, x0 + 50):
+            row_bar[2 * x] = bar_y       # en YUY2, la luminance du pixel x est à 2x
+    top, bottom = HEIGHT // 2 - 90, HEIGHT // 2 + 90
+    return b"".join(bytes(row_bar) if top <= y < bottom else row_bg
+                    for y in range(HEIGHT))
+
+
+PAUSE_FRAME = _pause_frame() if STDOUT_MODE else None
+# Dernière image du jeu écrite + quand : le métronome la répète si gamescope
+# ne livre plus rien (écran immobile, menu en pause, chargement, capture qui se
+# relance). Noir tant qu'aucune n'est arrivée, pour que ffmpeg démarre tout de
+# suite au lieu d'attendre la première image.
+LAST = {"frame": bytes([16, 128]) * (WIDTH * HEIGHT) if STDOUT_MODE else None}
+
+
+def start_metronome():
+    """Garantit 30 images/s dans le tuyau, quoi que fasse la capture.
+
+    Mesuré le 29/09 : écran immobile = gamescope n'envoie AUCUNE image ; ffmpeg
+    restait bloqué sur sa lecture, ne démarrait qu'à l'écran pause, et ne
+    traitait même plus le SIGINT d'arrêt (tué au bout de 6 s, fichier illisible).
+    Sur un live, ce trou coupe le flux vidéo chez Twitch/YouTube."""
+    period = 1.0 / FPS
+
+    def run():
+        # Échéances absolues : un sleep(period) après chaque écriture dériverait
+        # d'autant que dure l'écriture (1,8 Mo par image).
+        nxt = time.monotonic()
+        while True:
+            nxt += period
+            delay = nxt - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            else:
+                nxt = time.monotonic()       # en retard : on repart, sans rafale
+            try:
+                frame = PAUSE_FRAME if BRB["on"] else LAST["frame"]
+                write_frame(OUT_FD, frame)
+            except BrokenPipeError:
+                log.info("tuyau fermé par ffmpeg — arrêt du feeder")
+                os._exit(0)
+            except OSError:
+                pass
+    threading.Thread(target=run, daemon=True).start()
+
+
+def start_brb_listener():
+    """Écran pause piloté par signaux, reçus par un thread dédié (sigwait) :
+    indépendant de la boucle GLib, donc aussi pendant qu'une capture se relance.
+    Les deux signaux sont bloqués AVANT que GStreamer ne crée ses threads."""
+    sigs = {signal.SIGUSR1, signal.SIGUSR2}
+    signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+
+    def run():
+        while True:
+            sig = signal.sigwait(sigs)
+            BRB["on"] = sig == signal.SIGUSR1
+            log.info("écran pause " + ("affiché" if BRB["on"] else "retiré"))
+    threading.Thread(target=run, daemon=True).start()
 
 
 def _pw_dump(timeout=5):
@@ -187,13 +286,17 @@ def run_backend(backend, node, display):
 
     # Le device doit être ouvert + S_FMT AVANT que Discord n'énumère : c'est la
     # présence du writer qui fait annoncer CAPTURE (exclusive_caps=1).
-    try:
-        dev_fd = open_device_out()
-        log.info(f"{DEVICE} ouvert en écriture (S_FMT YUYV {WIDTH}x{HEIGHT}) — "
-                 f"device annoncé CAPTURE, Discord sera le lecteur unique")
-    except OSError as e:
-        log.error(f"ouverture {DEVICE} KO: {e!r}")
-        return False
+    if STDOUT_MODE:
+        dev_fd = OUT_FD
+    else:
+        try:
+            dev_fd = open_device_out()
+            log.info(f"{DEVICE} ouvert en écriture (S_FMT YUYV {WIDTH}x{HEIGHT}) — "
+                     f"device annoncé CAPTURE, Discord sera le lecteur unique")
+        except OSError as e:
+            log.error(f"ouverture {DEVICE} KO: {e!r}")
+            return False
+    out_name = "stdout" if STDOUT_MODE else DEVICE
 
     def on_error(_bus, msg):
         err, dbg = msg.parse_error()
@@ -228,16 +331,28 @@ def run_backend(backend, node, display):
         finally:
             buf.unmap(mi)
         try:
-            os.write(dev_fd, data)
+            if STDOUT_MODE:
+                # On DÉPOSE l'image, on n'écrit pas : ce thread est celui de
+                # PipeWire, et une écriture dans le tuyau bloque dès que ffmpeg
+                # prend du retard. Seul le métronome écrit. (29/09 : un premier
+                # enregistrement a fait boucler l'audio de tout le système, sans
+                # erreur PipeWire mesurable ensuite ; précaution, cause non prouvée.)
+                LAST["frame"] = data
+            else:
+                os.write(dev_fd, data)
+        except BrokenPipeError:
+            # ffmpeg est parti (live arrêté) : plus rien à alimenter.
+            log.info("tuyau fermé par ffmpeg — arrêt du feeder")
+            os._exit(0)
         except OSError as e:
-            log.error(f"write {DEVICE} KO: {e!r}")
+            log.error(f"write {out_name} KO: {e!r}")
             ok["value"] = False
             loop.quit()
             return Gst.FlowReturn.ERROR
         stats["n"] += 1
         # 90e frame → snapshot diag one-shot ; ensuite copie rafraîchie toutes
         # les ~60 frames (2s) pour l'aperçu QAM encodé par write_preview.
-        if stats["n"] == 90 or stats["n"] % 60 == 0:
+        if not STDOUT_MODE and (stats["n"] == 90 or stats["n"] % 60 == 0):
             snapbuf["data"] = data
             snapbuf["caps"] = sample.get_caps()
             if stats["n"] == 90:
@@ -245,12 +360,12 @@ def run_backend(backend, node, display):
         now = time.monotonic()
         if not stats["logged_caps"]:
             caps = sample.get_caps()
-            log.info(f"PREMIÈRE FRAME écrite vers {DEVICE} — caps négociées: "
+            log.info(f"PREMIÈRE FRAME écrite vers {out_name} — caps négociées: "
                      f"{caps.to_string() if caps else '?'}")
             stats["logged_caps"] = True
             stats["last_log"] = now
         elif now - stats["last_log"] >= 10.0:
-            log.info(f"frames écrites vers {DEVICE}: total={stats['n']}")
+            log.info(f"frames écrites vers {out_name}: total={stats['n']}")
             stats["last_log"] = now
         return Gst.FlowReturn.OK
 
@@ -260,7 +375,7 @@ def run_backend(backend, node, display):
     # Filet : si AUCUNE frame n'est arrivée après 5s, on le crie fort.
     def warn_if_no_frames():
         if stats["n"] == 0:
-            log.warning(f"AUCUNE frame poussée vers {DEVICE} après 5s "
+            log.warning(f"AUCUNE frame poussée vers {out_name} après 5s "
                         f"(backend={backend}, node={node}) — gamescope ne livre "
                         f"rien sur cette source → écran noir garanti.")
         return False
@@ -325,7 +440,8 @@ def run_backend(backend, node, display):
             pass
         return True  # timer répétitif
 
-    add_timeout(2000, write_preview)
+    if not STDOUT_MODE:
+        add_timeout(2000, write_preview)
 
     ret = pipe.set_state(Gst.State.PLAYING)
     log.info(f"set_state(PLAYING) → {ret} (backend={backend}, device={DEVICE}, node={node}, display={display})")
@@ -342,14 +458,19 @@ def run_backend(backend, node, display):
         pipe.set_state(Gst.State.NULL)
         # Fermer le writer EN DERNIER : le device repasse OUTPUT-only à la
         # fermeture (exclusive_caps) et disparaît des videoinputs de Discord.
-        try:
-            os.close(dev_fd)
-        except OSError:
-            pass
+        # En mode tuyau, on le GARDE : le pipeline suivant écrit dans le même.
+        if not STDOUT_MODE:
+            try:
+                os.close(dev_fd)
+            except OSError:
+                pass
     return ok["value"]
 
 
 def main():
+    if STDOUT_MODE:
+        start_brb_listener()             # avant Gst.init : masque hérité par ses threads
+        start_metronome()
     Gst.init(None)
 
     # On tente d'abord le node PipeWire gamescope (capture "officielle"), mais
