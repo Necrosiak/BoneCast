@@ -79,7 +79,7 @@ def open_device_out():
 
 # ── Sortie tuyau + écran pause (mode --stdout) ─────────────────────────────
 _write_lock = threading.Lock()   # une image entière à la fois (pause vs capture)
-BRB = {"on": False}
+BRB = {"on": False, "frame": None}
 
 
 def write_frame(fd, data):
@@ -107,6 +107,64 @@ def _pause_frame():
 
 
 PAUSE_FRAME = _pause_frame() if STDOUT_MODE else None
+
+# Écran pause perso : une image déposée à la main (mode Bureau) dans ce dossier.
+# Relue à CHAQUE pause → la changer ne demande ni redémarrage ni réglage.
+# Absente ou illisible = l'écran pause par défaut ci-dessus.
+BRB_DIR = os.path.expanduser("~/BoneCast-BRB")
+BRB_NAMES = ("brb.png", "brb.jpg", "brb.jpeg", "brb.webp")
+BRB_README = """BoneCast - custom pause screen (BRB)
+
+Put an image named brb.png (or brb.jpg / brb.webp) in this folder.
+BoneCast shows it on your stream when you press Pause (BRB).
+
+- 16:9 works best (1280x720 or 1920x1080); other sizes get black bars.
+- A new image is picked up the next time you press Pause.
+- Delete it to get the default pause screen back.
+"""
+
+
+def ensure_brb_dir():
+    try:
+        os.makedirs(BRB_DIR, exist_ok=True)
+        readme = os.path.join(BRB_DIR, "README.txt")
+        if not os.path.exists(readme):
+            with open(readme, "w") as f:
+                f.write(BRB_README)
+    except OSError as e:
+        log.warning(f"dossier BRB: {e!r}")
+
+
+def load_brb_image():
+    """Image perso convertie en YUY2 WIDTHxHEIGHT (bandes noires si le format
+    diffère), ou None. GStreamer est déjà là : pas de dépendance en plus."""
+    path = next((os.path.join(BRB_DIR, n) for n in BRB_NAMES
+                 if os.path.isfile(os.path.join(BRB_DIR, n))), None)
+    if not path:
+        return None
+    pipe = None
+    try:
+        pipe = Gst.parse_launch(
+            "filesrc name=src ! decodebin ! videoconvert ! videoscale ! "
+            f"video/x-raw,format=YUY2,width={WIDTH},height={HEIGHT},"
+            "pixel-aspect-ratio=1/1 ! appsink name=sink sync=false")
+        pipe.get_by_name("src").set_property("location", path)
+        pipe.set_state(Gst.State.PLAYING)
+        sample = pipe.get_by_name("sink").emit("try-pull-sample", 5 * Gst.SECOND)
+        if sample is None:
+            raise RuntimeError("aucune image décodée")
+        buf = sample.get_buffer()
+        data = buf.extract_dup(0, buf.get_size())
+        if len(data) != WIDTH * HEIGHT * 2:
+            raise RuntimeError(f"taille inattendue {len(data)}")
+        log.info(f"écran pause perso : {path}")
+        return data
+    except Exception as e:
+        log.warning(f"écran pause perso illisible ({path}): {e!r} → écran par défaut")
+        return None
+    finally:
+        if pipe is not None:
+            pipe.set_state(Gst.State.NULL)
 # Dernière image du jeu écrite + quand : le métronome la répète si gamescope
 # ne livre plus rien (écran immobile, menu en pause, chargement, capture qui se
 # relance). Noir tant qu'aucune n'est arrivée, pour que ffmpeg démarre tout de
@@ -135,7 +193,7 @@ def start_metronome():
             else:
                 nxt = time.monotonic()       # en retard : on repart, sans rafale
             try:
-                frame = PAUSE_FRAME if BRB["on"] else LAST["frame"]
+                frame = (BRB["frame"] or PAUSE_FRAME) if BRB["on"] else LAST["frame"]
                 write_frame(OUT_FD, frame)
             except BrokenPipeError:
                 log.info("tuyau fermé par ffmpeg — arrêt du feeder")
@@ -155,8 +213,12 @@ def start_brb_listener():
     def run():
         while True:
             sig = signal.sigwait(sigs)
+            if sig == signal.SIGUSR1:
+                # Chargée AVANT d'afficher : jamais une image à moitié prête.
+                BRB["frame"] = load_brb_image()
             BRB["on"] = sig == signal.SIGUSR1
             log.info("écran pause " + ("affiché" if BRB["on"] else "retiré"))
+    ensure_brb_dir()
     threading.Thread(target=run, daemon=True).start()
 
 

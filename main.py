@@ -103,16 +103,21 @@ class Plugin:
     _TWITCH_CLIENT_ID = "idbnwqbkqyrzesxct1ztkejyf5aj6z"
     # clips:edit = bouton « Clip » ; user:write:chat = envoi de messages chat ;
     # user:read:follows = liste des chaînes suivies actuellement en direct.
+    # moderator:read:followers = nouveaux followers affichés dans l'overlay.
     # Les logins existants n'ont PAS ces scopes → les endpoints renvoient 401 et
     # le front invite à se reconnecter (device flow re-demande tout).
     _TWITCH_SCOPES = ("channel:read:stream_key channel:manage:broadcast "
                       "clips:edit user:write:chat user:read:follows")
+    # moderator:read:followers (follows dans l overlay) : code prêt mais PAS
+    # encore demandé — à ajouter ici quand la fonction sera testée et livrée.
     _TWITCH_JUST_CHATTING = "509658"          # game_id « Just Chatting »
     _tw_device = None                          # état transitoire du device flow
     _overlay_proc = None
     _overlay_platform = None                   # "twitch" | "youtube" (un overlay à la fois)
     _watch_proc = None                          # helper GTK : lives Twitch par-dessus le jeu
     _watch_start_lock = None                    # évite deux starts QAM simultanés
+    _start_stream_lock = None                   # un seul lancement de live à la fois
+    _start_overlay_lock = None                  # un seul lancement d'overlay à la fois
     _stream_proc = None                        # ffmpeg RTMP (live Twitch ou YouTube)
     _stream_platform = None                    # "twitch" | "youtube" | "record" (un seul à la fois)
     _camera_feeder = None                      # gst_camera.py --stdout → tuyau → ffmpeg
@@ -471,8 +476,8 @@ class Plugin:
     # Client « TV et appareils à saisie limitée » : Google exige le secret dans
     # ce flux, mais le déclare lui-même non confidentiel pour ce type de client
     # (il est embarqué dans chaque appli de TV). Vide = connexion masquée.
-    _YT_CLIENT_ID = ""
-    _YT_CLIENT_SECRET = ""
+    _YT_CLIENT_ID = "617671992109-u15vhd4phh25qgjnnp0j20ej42i39b1h.apps.googleusercontent.com"
+    _YT_CLIENT_SECRET = "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"
     _YT_SCOPE = "https://www.googleapis.com/auth/youtube"
     _YT_INGEST = "rtmp://a.rtmp.youtube.com/live2"
     _YT_API = "https://www.googleapis.com/youtube/v3/"
@@ -682,6 +687,7 @@ class Plugin:
         y["broadcast_id"] = bid
         y["live_chat_id"] = (body.get("snippet") or {}).get("liveChatId", "")
         cls._save_cfg(cfg)
+        cls._yt_write_live_hint(y.get("channel_id", ""), bid)
         # Catégorie « Jeux vidéo » : l'API ne permet pas de choisir le jeu.
         await cls._yt_api("PUT", "videos", params={"part": "snippet"},
                           json_body={"id": bid, "snippet": {"title": title[:100],
@@ -702,6 +708,25 @@ class Plugin:
         cfg = cls._load_cfg()
         cls._yt_cfg(cfg).pop("broadcast_id", None)
         cls._save_cfg(cfg)
+        cls._yt_write_live_hint("", "")
+
+    # Un live privé ou non répertorié n'apparaît PAS sur /channel/<id>/live :
+    # l'overlay attendait à l'infini (test 29/09). On lui donne l'ID de la vidéo
+    # qu'on vient de créer ; yt_chat.py relit ce fichier à chaque tentative, donc
+    # un overlay ouvert avant le live le trouve aussi. Vide = plus de live.
+    _YT_LIVE_HINT = "/tmp/bonecast-yt-live.json"
+
+    @classmethod
+    def _yt_write_live_hint(cls, channel_id, video_id):
+        try:
+            if not video_id:
+                if os.path.exists(cls._YT_LIVE_HINT):
+                    os.remove(cls._YT_LIVE_HINT)
+                return
+            with open(cls._YT_LIVE_HINT, "w") as f:
+                dump({"channel": channel_id, "video": video_id}, f)
+        except Exception as e:
+            logger.warning(f"[youtube] live hint: {e!r}")
 
     @classmethod
     def _yt_chat_source(cls, cfg=None):
@@ -864,6 +889,15 @@ class Plugin:
 
     @classmethod
     async def start_overlay(cls, platform="twitch"):
+        # Même course que start_stream (le processus n'existe qu'après l'await
+        # de create_subprocess_exec) : un seul overlay, Twitch OU YouTube.
+        if cls._start_overlay_lock is None:
+            cls._start_overlay_lock = Lock()
+        async with cls._start_overlay_lock:
+            return await cls._start_overlay_unlocked(platform)
+
+    @classmethod
+    async def _start_overlay_unlocked(cls, platform="twitch"):
         platform = "youtube" if platform == "youtube" else "twitch"
         if cls._overlay_proc is not None and cls._overlay_proc.returncode is None:
             if cls._overlay_platform == platform:
@@ -908,16 +942,83 @@ class Plugin:
             create_task(stream_watcher(cls._overlay_proc.stdout, prefix="[overlay]"))
             create_task(stream_watcher(cls._overlay_proc.stderr, True, prefix="[overlay]"))
             logger.info(f"[overlay] démarré ({platform}: {channel})")
+            if platform == "twitch":
+                cls._start_follows(d, cls._overlay_proc)
             return {"ok": True}
         except Exception as e:
             logger.warning(f"[overlay] start failed: {e!r}")
             return {"ok": False, "error": str(e)}
+
+    # ── Nouveaux followers Twitch → overlay ────────────────────────────────
+    # Les follows ne passent PAS par l'IRC (contrairement aux subs/raids/bits) :
+    # Helix /channels/followers, lu toutes les 15 s tant que l'overlay Twitch
+    # tourne. Le 1er appel sert de référence (pas de rafale d'anciens follows),
+    # la suite est écrite dans follows.json, que chat.html relit comme son
+    # fichier de réglages. Sans le scope (login antérieur) : rien, et le QAM
+    # propose de se reconnecter.
+    _follows_task = None
+    _FOLLOWS_EVERY = 15
+
+    @classmethod
+    def _start_follows(cls, d, proc):
+        oauth = cls._load_cfg().get("oauth") or {}
+        if "moderator:read:followers" not in (oauth.get("scopes") or []):
+            return
+        if cls._follows_task is not None and not cls._follows_task.done():
+            cls._follows_task.cancel()
+        cls._follows_task = create_task(cls._follows_loop(d, proc))
+
+    @classmethod
+    def _write_follows(cls, d, events):
+        path = os.path.join(d, "follows.json")
+        try:
+            with open(path + ".tmp", "w") as f:
+                dump({"events": events}, f)
+            os.replace(path + ".tmp", path)
+        except Exception as e:
+            logger.warning(f"[follows] écriture: {e!r}")
+
+    @classmethod
+    async def _follows_loop(cls, d, proc):
+        from asyncio import sleep
+        bid = cls._broadcaster_id()
+        if not bid:
+            return
+        seen, events = None, []
+        cls._write_follows(d, events)
+        while cls._overlay_proc is proc and proc.returncode is None:
+            try:
+                st, body = await cls._api("GET", "channels/followers",
+                                          params={"broadcaster_id": bid, "first": 20})
+                if st in (401, 403):
+                    logger.info(f"[follows] refusé (http {st}) — arrêt")
+                    return
+                if st == 200:
+                    data = (body or {}).get("data") or []
+                    if seen is None:
+                        seen = {x.get("user_id") for x in data}
+                    else:
+                        new = [x for x in reversed(data) if x.get("user_id") not in seen]
+                        for x in new:
+                            seen.add(x.get("user_id"))
+                            events.append({"id": x.get("user_id", ""),
+                                           "name": x.get("user_name") or x.get("user_login", ""),
+                                           "at": x.get("followed_at", "")})
+                        if new:
+                            events = events[-30:]
+                            cls._write_follows(d, events)
+            except Exception as e:
+                logger.warning(f"[follows] {e!r}")
+            await sleep(cls._FOLLOWS_EVERY)
 
     @classmethod
     async def stop_overlay(cls):
         proc = cls._overlay_proc
         cls._overlay_proc = None
         cls._overlay_platform = None
+        if cls._follows_task is not None and not cls._follows_task.done():
+            cls._follows_task.cancel()
+        cls._follows_task = None
         if proc is not None and proc.returncode is None:
             try:
                 proc.terminate()
@@ -1406,6 +1507,18 @@ class Plugin:
 
     @classmethod
     async def start_stream(cls, record_only=False, platform="twitch"):
+        # Le test « un live tourne déjà ? » précède 1 à 2 s d'attentes (API
+        # YouTube/Twitch, sondes d'encodeur) avant que ffmpeg n'existe : deux
+        # lancements rapprochés (Twitch puis YouTube, ou double appui) passaient
+        # tous les deux → deux ffmpeg, dont un orphelin. Le verrou fait attendre
+        # le second, qui voit alors le live en cours et répond « busy ».
+        if cls._start_stream_lock is None:
+            cls._start_stream_lock = Lock()
+        async with cls._start_stream_lock:
+            return await cls._start_stream_unlocked(record_only, platform)
+
+    @classmethod
+    async def _start_stream_unlocked(cls, record_only=False, platform="twitch"):
         from asyncio import create_subprocess_exec, sleep
         from subprocess import PIPE
         import shutil as _sh

@@ -240,7 +240,7 @@ function StreamControls({ platform, color, ready, beforeStart, clip }: {
     r?.error === "busy" ? t("err_busy", { p: platformName(r?.platform) })
     : r?.error === "no_key" ? t("err_no_key")
     : r?.error === "no_yt_key" ? t("err_no_yt_key")
-    : r?.error === "yt_api" ? "⚠️ YouTube : " + (r?.hint || t("err_live_failed"))
+    : r?.error === "yt_api" ? ytReason(r?.hint, t("err_live_failed"))
     : r?.error === "no_ffmpeg" ? "⚠️ " + (r?.hint || t("hint_no_ffmpeg"))
     : r?.error === "no_x264" ? "⚠️ " + (r?.hint || t("hint_no_x264"))
     : r?.error === "no_gst" ? "⚠️ " + (r?.hint || t("hint_no_gst"))
@@ -369,6 +369,25 @@ function StreamControls({ platform, color, ready, beforeStart, clip }: {
     </>
   );
 }
+
+// Codes d'erreur bruts de l'API YouTube (champ `reason`) → phrase utile.
+// Tout nouvel utilisateur tombe sur liveStreamingNotEnabled (24 h d'attente
+// chez YouTube la 1re fois) : un code nu ne lui dit pas quoi faire.
+const YT_REASONS: Record<string, string> = {
+  liveStreamingNotEnabled: "yt_err_not_enabled",
+  livePermissionBlocked: "yt_err_blocked",
+  accessNotConfigured: "yt_err_api_off",
+  quotaExceeded: "yt_err_quota",
+  rateLimitExceeded: "yt_err_quota",
+  userRequestsExceedRateLimit: "yt_err_quota",
+  insufficientPermissions: "yt_err_auth",
+  authError: "yt_err_auth",
+  not_logged_in: "yt_err_auth",
+};
+const ytReason = (reason?: string, fallback?: string) => {
+  const key = reason ? YT_REASONS[reason] : undefined;
+  return key ? "⚠️ " + t(key) : "⚠️ YouTube : " + (reason || fallback || "");
+};
 
 const platformName = (p?: string) =>
   p === "youtube" ? "YouTube" : p === "record" ? t("recording_name") : "Twitch";
@@ -527,6 +546,15 @@ function YouTubeSection() {
 // ── Onglet CHAT : overlay + écrire dans son chat ─────────────────────────────
 function ChatSection({ platform }: { platform: "twitch" | "youtube" }) {
   const yt = platform === "youtube";
+  // Connecté à Twitch sans le droit de lire les followers (login antérieur) →
+  // l'overlay ne peut pas afficher les nouveaux follows : on le dit.
+  const [followsMissing, setFollowsMissing] = useState(false);
+  useEffect(() => {
+    if (yt) return;
+    call<[], any>("get_config")
+      .then((c: any) => setFollowsMissing(!!c?.logged_in && c?.follows_scope === false))
+      .catch(() => {});
+  }, [yt]);
   const color = yt ? YOUTUBE : TWITCH;
   const [canSend, setCanSend] = useState(!yt);
   const [otherOverlay, setOtherOverlay] = useState<string | null>(null);
@@ -571,6 +599,7 @@ function ChatSection({ platform }: { platform: "twitch" | "youtube" }) {
       else setChatMsg(r?.error === "missing_scope"
         ? t("reconnect_scopes")
         : r?.error === "not_live" ? t("yt_chat_not_live")
+        : yt && r?.error && r.error !== "empty" ? ytReason(r.error)
         : "⚠️ " + (r?.error || t("err_send_failed")));
     } finally { setChatBusy(false); }
   };
@@ -578,6 +607,13 @@ function ChatSection({ platform }: { platform: "twitch" | "youtube" }) {
   return (
     <>
       {canSend && <PanelSection title={t("chat_write_title")}>
+      {followsMissing && (
+        <PanelSectionRow>
+          <div style={{ fontSize: 11, opacity: 0.75, color: "#fff", lineHeight: 1.5 }}>
+            {t("follows_reconnect")}
+          </div>
+        </PanelSectionRow>
+      )}
         <PanelSectionRow>
           <TextField label={t("message_label")} value={chatInput}
             placeholder={t("chat_placeholder")}
@@ -759,6 +795,12 @@ function StreamSettings({ platform }: { platform: "twitch" | "youtube" }) {
           checked={!!st.record}
           description={t("record_desc")}
           onChange={(v: boolean) => pushSt({ record: v })} bottomSeparator="none" />
+      </PanelSectionRow>
+      {/* Écran pause perso : image déposée à la main depuis le mode Bureau. */}
+      <PanelSectionRow>
+        <div style={{ fontSize: 11, opacity: 0.75, color: "#fff", lineHeight: 1.5 }}>
+          {t("brb_custom_hint")}
+        </div>
       </PanelSectionRow>
     </PanelSection>
   );
@@ -1105,10 +1147,18 @@ function WatchSection() {
   );
 }
 
+const LAST_PLATFORM_KEY = "bonecast_last_platform";
+
 function Content() {
   // Deux plateformes indépendantes : chacune a ses sous-onglets et SES réglages.
   // Seuls les mises à jour et l'« À propos » sont communs (onglet Config).
-  const [platform, setPlatform] = useState<"twitch" | "youtube" | "config">("twitch");
+  // #1 (dreemur-e) : on rouvre sur la dernière plateforme choisie (Twitch ou
+  // YouTube) au lieu de toujours Twitch → moins de boutons en plein live.
+  // L'onglet ⚙ n'est pas retenu : on y passe, on n'y reste pas.
+  const [platform, setPlatform] = useState<"twitch" | "youtube" | "config">(() => {
+    try { return localStorage.getItem(LAST_PLATFORM_KEY) === "youtube" ? "youtube" : "twitch"; }
+    catch { return "twitch"; }
+  });
   const [tab, setTab] = useState<"live" | "watch" | "chat" | "settings">("live");
   const [focus, setFocus] = useState<string | null>(null);
   const tb = (id: string, active: boolean, onClick: () => void, label: any, color?: string) => (
@@ -1119,7 +1169,10 @@ function Content() {
       {label}
     </TabBtn>
   );
-  const pick = (p: "twitch" | "youtube" | "config") => { setPlatform(p); setTab("live"); };
+  const pick = (p: "twitch" | "youtube" | "config") => {
+    setPlatform(p); setTab("live");
+    if (p !== "config") { try { localStorage.setItem(LAST_PLATFORM_KEY, p); } catch {} }
+  };
   const accent = platform === "youtube" ? YOUTUBE : TWITCH;
   return (
     <>

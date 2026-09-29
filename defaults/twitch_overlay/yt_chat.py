@@ -49,6 +49,23 @@ def live_url(source):
     return f"https://www.youtube.com/@{s.lstrip('@')}/live"
 
 
+LIVE_HINT = "/tmp/bonecast-yt-live.json"
+
+
+def live_hint(source):
+    """Vidéo du live que BoneCast vient de lancer sur CETTE chaîne (privé ou non
+    répertorié compris : ils n'apparaissent pas sur /live), sinon None."""
+    try:
+        with open(LIVE_HINT) as f:
+            h = json.load(f)
+    except Exception:
+        return None
+    s = (source or "").strip()
+    if h.get("video") and h.get("channel") and h.get("channel") in s:
+        return h["video"]
+    return None
+
+
 def resolve_video(source):
     """ID de la vidéo en direct, ou None si la chaîne n'est pas en live."""
     s = (source or "").strip()
@@ -105,21 +122,62 @@ def _badge(renderer):
     return ""
 
 
+def _text(obj):
+    """Texte d'un champ innertube : simpleText, ou runs mis bout à bout."""
+    obj = obj or {}
+    if "simpleText" in obj:
+        return obj["simpleText"]
+    return "".join(r.get("text", "") for r in obj.get("runs") or [])
+
+
+def _event(item):
+    """Événement du live (Super Chat, Super Sticker, membre, abonnements offerts)
+    → dict affiché en carte dans l'overlay, ou None. Le texte vient de YouTube,
+    déjà traduit dans la langue de la chaîne : rien à traduire ici."""
+    r = item.get("liveChatPaidMessageRenderer")
+    if r:
+        return {"event": "superchat", "name": _text(r.get("authorName")),
+                "badge": _badge(r), "head": _text(r.get("purchaseAmountText")),
+                "runs": _runs((r.get("message") or {}).get("runs"))}
+    r = item.get("liveChatPaidStickerRenderer")
+    if r:
+        thumbs = ((r.get("sticker") or {}).get("thumbnails")) or [{}]
+        runs = [{"img": thumbs[-1]["url"], "alt": "sticker"}] if thumbs[-1].get("url") else []
+        return {"event": "sticker", "name": _text(r.get("authorName")),
+                "badge": _badge(r), "head": _text(r.get("purchaseAmountText")), "runs": runs}
+    r = item.get("liveChatMembershipItemRenderer")
+    if r:
+        # Nouveau membre : headerSubtext (« Bienvenue dans … ») ; palier :
+        # headerPrimaryText (« Membre depuis 3 mois ») + message éventuel.
+        head = _text(r.get("headerPrimaryText")) or _text(r.get("headerSubtext"))
+        runs = _runs((r.get("message") or {}).get("runs"))
+        if not runs and r.get("headerPrimaryText"):
+            runs = [{"t": _text(r.get("headerSubtext"))}]
+        return {"event": "member", "name": _text(r.get("authorName")),
+                "badge": "member", "head": head, "runs": runs}
+    r = item.get("liveChatSponsorshipsGiftPurchaseAnnouncementRenderer")
+    if r:
+        h = ((r.get("header") or {}).get("liveChatSponsorshipsHeaderRenderer")) or {}
+        return {"event": "gift", "name": _text(h.get("authorName")),
+                "badge": _badge(h), "head": _text(h.get("primaryText")), "runs": []}
+    return None
+
+
 def parse_actions(actions):
     msgs = []
     for a in actions or []:
         item = (a.get("addChatItemAction") or {}).get("item") or {}
+        ev = _event(item)
+        if ev:
+            msgs.append(ev)
+            continue
         r = item.get("liveChatTextMessageRenderer")
-        paid = item.get("liveChatPaidMessageRenderer")
-        if paid:
-            r = paid
         if not r:
             continue
         msgs.append({
             "name": (r.get("authorName") or {}).get("simpleText", ""),
             "badge": _badge(r),
             "runs": _runs((r.get("message") or {}).get("runs")),
-            "amount": (paid or {}).get("purchaseAmountText", {}).get("simpleText", ""),
         })
     return msgs
 
@@ -141,7 +199,7 @@ class YtChat(threading.Thread):
     def run(self):
         while not self._stop.is_set():
             try:
-                vid = resolve_video(self.source)
+                vid = live_hint(self.source) or resolve_video(self.source)
                 if not vid:
                     self.on_status("waiting", "")
                     self._stop.wait(30)
@@ -177,5 +235,8 @@ class YtChat(threading.Thread):
             c = data.get("continuation")
             if not c:
                 return
-            wait = int(data.get("timeoutMs", 5000)) / 1000
-            self._stop.wait(min(max(wait, 1.0), 10.0))
+            # YouTube propose 5 à 10 s entre deux lectures (timeoutMs) : c est
+            # le rythme du lecteur web, pas une limite. Le suivre donnait jusqu à
+            # 10 s de retard dans l overlay (test 29/09) → 2 s max.
+            wait = int(data.get("timeoutMs", 2000)) / 1000
+            self._stop.wait(min(max(wait, 1.0), 2.0))

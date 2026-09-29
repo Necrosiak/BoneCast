@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.5.0 — 2026-09-29
+
+### Log in with YouTube
+
+Requested in [#1](https://github.com/Necrosiak/BoneCast/issues/1).
+
+- **YouTube login**, like Twitch: tap *Log in*, enter the code on
+  `google.com/device`, and BoneCast creates the live for you. No stream key
+  to copy. Google shows an "unverified app" warning on the way; that's
+  expected, tap *Continue*. The stream key still works if you'd rather not
+  log in.
+- **Title and visibility** (public, unlisted, private) from the QAM. The
+  title can be changed **while live**.
+- **Write in your own YouTube chat** from the Chat tab.
+- **Clear YouTube errors.** Instead of a raw code, BoneCast now says what to
+  do, for example when live streaming isn't enabled on your channel yet
+  (YouTube takes up to 24 hours the first time).
+- **BoneCast reopens on the platform you used last**, Twitch or YouTube, so
+  there's one less tap during a live.
+
+### Chat overlay
+
+- **Live events show as highlighted cards**: subs, resubs, gifted subs,
+  raids and bits on Twitch; Super Chats, Super Stickers, new members and
+  gifted memberships on YouTube.
+- **Unlisted YouTube lives** now show in the chat overlay. The overlay used to
+  look for the live on your channel page, where only public lives appear.
+- **YouTube chat arrives faster**: every 2 seconds instead of up to 10.
+
+### Your own pause screen
+
+- Put an image named `brb.png` (or `.jpg` / `.webp`) in the `BoneCast-BRB`
+  folder of your home folder, from Desktop Mode. BoneCast shows it when you
+  press Pause, and picks up a new image the next time you press it. 16:9
+  works best; other sizes get black bars. No image, or one that can't be
+  read, gives the usual pause screen.
+
+### Fix
+
+- Starting two lives within a second or two (Twitch then YouTube, or a double
+  tap) could start two encoders at once. Starts now wait for each other, so
+  the second one is refused as it should be. Same for the chat overlay.
+
 ## 0.4.1 — 2026-09-29
 
 ### Going live works on a stock Steam Deck

@@ -40,6 +40,10 @@
   .m .sep { opacity: 0.6; }
   .m .e { height: 1.6em; vertical-align: -0.45em; margin: 0 1px; }
   .sys { font-size: 11px; opacity: 0.55; font-style: italic; margin: 4px 0; }
+  /* Événements du live (subs, raids, bits, Super Chat, membres) : carte teintée. */
+  .ev { margin: 5px 0; padding: 4px 7px; border-radius: 6px;
+    border-left: 3px solid var(--evc); background: var(--evb); }
+  .ev .h { display: block; font-weight: 700; color: var(--evc); }
 
   /* Poignée de redimensionnement (coin bas-gauche, la boîte étant ancrée à droite). */
   #grip { position: absolute; left: 0; bottom: 0; width: 16px; height: 16px;
@@ -207,6 +211,48 @@ function addMessage(tags, user, text) {
   log.appendChild(el); trim();
 }
 
+// ── Événements du live Twitch, lus sur le même IRC anonyme ──
+// USERNOTICE (subs, resubs, cadeaux, raids) : Twitch fournit la phrase toute
+// faite dans le tag system-msg. Bits = PRIVMSG portant le tag bits.
+// BEGIN-TW-EVENTS
+const EV_COLORS = { follow: "#00c8af", sub: "#9146ff", gift: "#9146ff", raid: "#ff7a45", bits: "#ffca28",
+  superchat: "#ffca28", sticker: "#ffca28", member: "#2ba640" };
+const TW_SUBS = { sub: "sub", resub: "sub", subgift: "gift", submysterygift: "gift",
+  giftpaidupgrade: "sub", primepaidupgrade: "sub", anongiftpaidupgrade: "sub",
+  standardpayforward: "gift", communitypayforward: "gift", raid: "raid" };
+function unescTag(v) {
+  return (v || "").replace(/\\(s|:|\\|r|n)/g, (_, c) =>
+    ({ s: " ", ":": ";", "\\": "\\", r: "", n: "" })[c]);
+}
+function twitchEvent(tags, rest) {
+  const un = rest.match(/^:[^ ]+ USERNOTICE #[^ ]+(?: :([\s\S]*))?$/);
+  if (un) {
+    const kind = TW_SUBS[tags["msg-id"]];
+    if (!kind) return null;
+    // Un « cadeau à la communauté » est suivi d'un subgift par destinataire :
+    // la carte récapitulative suffit, sinon 50 cadeaux = 50 cartes.
+    if (tags["msg-id"] === "subgift" && tags["msg-param-community-gift-id"]) return null;
+    return { kind, head: unescTag(tags["system-msg"]), text: un[1] || "", emotes: tags.emotes };
+  }
+  const pm = rest.match(/^:([^!]+)![^ ]+ PRIVMSG #[^ ]+ :([\s\S]*)$/);
+  if (pm && Number(tags.bits) > 0) {
+    const name = tags["display-name"] || pm[1];
+    return { kind: "bits", head: name + " — " + tags.bits + " bits", text: pm[2], emotes: tags.emotes };
+  }
+  return null;
+}
+// END-TW-EVENTS
+function addEvent(kind, headHtml, bodyHtml) {
+  const el = document.createElement("div"); el.className = "m ev";
+  const c = EV_COLORS[kind] || "#9146ff";
+  // Teinte calculée ici plutôt qu en CSS color-mix(), absent des vieux WebKitGTK.
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+  el.style.setProperty("--evc", c);
+  el.style.setProperty("--evb", `rgba(${r},${g},${b},0.22)`);
+  el.innerHTML = `<span class="h">${headHtml}</span>` + (bodyHtml || "");
+  log.appendChild(el); trim();
+}
+
 // ── Connexion IRC Twitch (WebSocket, anonyme, lecture seule). ──
 let ws, reconnectT, pingT, roomId = null, loaded = false;
 function connect() {
@@ -234,6 +280,8 @@ function handleLine(line) {
     if (!loaded && tags["room-id"]) { loaded = true; roomId = tags["room-id"];
       loadBadges(roomId); loadEmotes(roomId); }
   }
+  const ev = twitchEvent(tags, rest);
+  if (ev) { addEvent(ev.kind, esc(ev.head), ev.text ? renderText(ev.text, ev.emotes) : ""); return; }
   const m = rest.match(/^:([^!]+)![^ ]+ PRIVMSG #[^ ]+ :([\s\S]*)$/);
   if (m) addMessage(tags, m[1], m[2].replace(/[]/g, "").replace(/^ACTION |ACTION$/g,""));
 }
@@ -304,15 +352,20 @@ if (CFG.stateUrl) {
 // ── YouTube : pas d'IRC, les messages arrivent de yt_chat.py (overlay.py). ──
 const YT_COLORS = { owner: "#ffd600", moderator: "#5e84f1", member: "#2ba640", verified: "#aaaaaa" };
 function addYtMessage(m) {
-  const el = document.createElement("div"); el.className = "m";
   const color = YT_COLORS[m.badge] || "#c8c8c8";
   let body = "";
   (m.runs || []).forEach(r => {
     if (r.img) body += `<img class="e" src="${esc(r.img)}" loading="lazy" title="${esc(r.alt || "")}">`;
     else body += esc(r.t || "");
   });
-  const amount = m.amount ? `<span class="u" style="color:#ffca28">${esc(m.amount)} </span>` : "";
-  el.innerHTML = amount + `<span class="u" style="color:${color}">${esc(m.name || "")}</span><span class="sep">: </span>` + body;
+  if (m.event) {
+    // Super Chat / Sticker : « Nom — 5,00 € » ; membre / cadeaux : « Nom — texte YouTube ».
+    const head = esc(m.name || "") + (m.head ? " — " + esc(m.head) : "");
+    addEvent(m.event, head, body);
+    return;
+  }
+  const el = document.createElement("div"); el.className = "m";
+  el.innerHTML = `<span class="u" style="color:${color}">${esc(m.name || "")}</span><span class="sep">: </span>` + body;
   log.appendChild(el); trim();
 }
 window.bcYt = {
@@ -323,6 +376,25 @@ window.bcYt = {
     else { dot.classList.remove("on"); sys("reconnexion au chat YouTube…"); }
   },
 };
+
+// ── Nouveaux followers Twitch : follows.json, écrit par le backend à côté du
+// fichier de réglages. La 1re lecture sert de référence (rien de rejoué si la
+// page se recharge en plein live). ──
+if (CFG.stateUrl && CFG.platform !== "youtube") {
+  const followsUrl = CFG.stateUrl.replace(/overlay_state\.json$/, "follows.json");
+  let known = null;
+  setInterval(async () => {
+    try {
+      const r = await fetch(followsUrl, { cache: "no-store" });
+      if (!r.ok && r.status !== 0) return;
+      const txt = await r.text(); if (!txt) return;
+      const evs = (JSON.parse(txt).events) || [];
+      if (known === null) { known = new Set(evs.map(e => e.id)); return; }
+      evs.forEach(e => { if (known.has(e.id)) return; known.add(e.id);
+        addEvent("follow", esc(e.name || "") + " is now following!", ""); });
+    } catch (e) {}
+  }, 3000);
+}
 
 if (CFG.platform === "youtube") {
   sys("connexion au chat YouTube de " + (CFG.ytSource || "?") + " …");
