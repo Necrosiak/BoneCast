@@ -438,7 +438,6 @@ function YouTubeSection() {
   };
   const save = (patch: any) =>
     call<[any], any>("yt_set_settings", patch).then(() => refresh()).catch(() => {});
-  const doLogout = () => call("yt_logout").then(() => refresh()).catch(() => {});
 
   const loggedIn = !!yt.logged_in;
   const ready = loggedIn || !!yt.key_set;
@@ -489,6 +488,15 @@ function YouTubeSection() {
                 { data: "private", label: t("yt_private") },
               ]} onChange={(e: any) => save({ privacy: e.data })} />
           </PanelSectionRow>
+          {/* Latence du live (#1) : prise en compte au prochain lancement. */}
+          <PanelSectionRow>
+            <Dropdown strDefaultLabel={t("yt_latency")} selectedOption={yt.latency || "normal"}
+              rgOptions={[
+                { data: "normal", label: t("yt_latency_normal") },
+                { data: "low", label: t("yt_latency_low") },
+                { data: "ultraLow", label: t("yt_latency_ultra") },
+              ]} onChange={(e: any) => save({ latency: e.data })} />
+          </PanelSectionRow>
           <PanelSectionRow>
             <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
               <IcController /> {t("yt_category_note")}
@@ -532,13 +540,6 @@ function YouTubeSection() {
       )}
       <StreamControls platform="youtube" color={YOUTUBE} ready={ready} />
       {msg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff" }}>{msg}</div></PanelSectionRow>}
-      {loggedIn && (
-        <PanelSectionRow>
-          <ActionCard color={DANGER} onClick={doLogout}>
-            <IcLogout /> {t("yt_logout")}
-          </ActionCard>
-        </PanelSectionRow>
-      )}
     </PanelSection>
   );
 }
@@ -704,6 +705,31 @@ function ChatSection({ platform }: { platform: "twitch" | "youtube" }) {
 }
 
 // ── Onglet CONFIG : réglages stream + mises à jour + à propos + déconnexion ──
+function RecordLocation() {
+  const [loc, setLoc] = useState<any>(null);
+  const load = () => call<[], any>("get_record_locations").then(setLoc).catch(() => {});
+  useEffect(() => { load(); }, []);
+  if (!loc?.options) return null;
+  const label = (o: any) => {
+    const where = o.internal ? t("record_internal") : o.name;
+    return o.free_gb != null ? `${where} — ${t("record_free", { gb: o.free_gb })}` : where;
+  };
+  return (
+    <>
+      <PanelSectionRow>
+        <Dropdown strDefaultLabel={t("record_location")} selectedOption={loc.selected}
+          rgOptions={loc.options.map((o: any) => ({ data: o.id, label: label(o) }))}
+          onChange={(e: any) => call<[string], any>("set_record_drive", e.data).then(load).catch(() => {})} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <div style={{ fontSize: 11, opacity: 0.75, color: "#fff", lineHeight: 1.5 }}>
+          {loc.missing ? t("record_missing", { d: loc.missing }) : t("record_location_desc")}
+        </div>
+      </PanelSectionRow>
+    </>
+  );
+}
+
 function StreamSettings({ platform }: { platform: "twitch" | "youtube" }) {
   const [encoders, setEncoders] = useState<string[]>(["software"]);
   const [steamcord, setSteamcord] = useState(false);
@@ -796,6 +822,8 @@ function StreamSettings({ platform }: { platform: "twitch" | "youtube" }) {
           description={t("record_desc")}
           onChange={(v: boolean) => pushSt({ record: v })} bottomSeparator="none" />
       </PanelSectionRow>
+      {/* Où vont les enregistrements : stockage interne, carte SD, disque externe (#1). */}
+      <RecordLocation />
       {/* Écran pause perso : image déposée à la main depuis le mode Bureau. */}
       <PanelSectionRow>
         <div style={{ fontSize: 11, opacity: 0.75, color: "#fff", lineHeight: 1.5 }}>
@@ -908,19 +936,52 @@ function UpdaterSection() {
   );
 }
 
-// À propos + déconnexion Twitch (bas de l'onglet Config, comme Steamcord).
+// Comptes connectés : une ligne par plateforme (icône, nom, « Se déconnecter »).
+// Rangés dans ⚙ plutôt que dans Live : pas de déconnexion par erreur en direct.
+function AccountRow({ icon, color, name, onLogout }: any) {
+  return (
+    <PanelSectionRow>
+      <ActionCard color={DANGER} center={false} onClick={onLogout}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0 }}>
+          <span style={{ color, display: "flex", flexShrink: 0 }}>{icon}</span>
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
+            whiteSpace: "nowrap", textAlign: "left", fontWeight: 600 }}>{name}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
+            fontSize: 12, opacity: 0.8 }}>
+            <IcLogout /> {t("logout_short")}
+          </span>
+        </div>
+      </ActionCard>
+    </PanelSectionRow>
+  );
+}
+
+function AccountsSection() {
+  const [tw, setTw] = useState<any>(null);
+  const [yt, setYt] = useState<any>(null);
+  const load = () => call<[], any>("get_config").then((c: any) => {
+    setTw(c?.logged_in ? { name: c?.login ? `@${c.login}` : "Twitch" } : null);
+    setYt(c?.youtube?.logged_in ? { name: c?.youtube?.channel || "YouTube" } : null);
+  }).catch(() => {});
+  useEffect(() => { load(); }, []);
+  if (!tw && !yt) return null;
+  return (
+    <PanelSection title={t("accounts_title")}>
+      {tw && <AccountRow icon={<FaTwitch />} color={TWITCH} name={tw.name}
+        onLogout={() => call("logout").then(load).catch(() => {})} />}
+      {yt && <AccountRow icon={<FaYoutube />} color={YOUTUBE} name={yt.name}
+        onLogout={() => call("yt_logout").then(load).catch(() => {})} />}
+    </PanelSection>
+  );
+}
+
+// À propos (bas de l'onglet Config, comme Steamcord).
 function AboutSection() {
   const [version, setVersion] = useState("");
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [login, setLogin] = useState("");
   useEffect(() => {
     call<[], string>("get_version").then((v) => setVersion(v || "")).catch(() => {});
-    call<[], any>("get_config").then((c: any) => {
-      setLoggedIn(!!c?.logged_in); setLogin(c?.login || "");
-    }).catch(() => {});
   }, []);
   const open = (url: string) => { try { (window as any).SteamClient?.URL?.ExecuteSteamURL?.("steam://openurl/" + url); } catch {} };
-  const doLogout = () => call("logout").then(() => setLoggedIn(false)).catch(() => {});
   return (
     <PanelSection title={t("about_title")}>
       <PanelSectionRow>
@@ -934,13 +995,6 @@ function AboutSection() {
           <IcGithub /> GitHub
         </ActionCard>
       </PanelSectionRow>
-      {loggedIn && (
-        <PanelSectionRow>
-          <ActionCard color={DANGER} onClick={doLogout}>
-            <IcLogout /> {t("logout")}{login ? ` (@${login})` : ""}
-          </ActionCard>
-        </PanelSectionRow>
-      )}
     </PanelSection>
   );
 }
@@ -949,6 +1003,7 @@ function ConfigSection() {
   return (
     <>
       <UpdaterSection />
+      <AccountsSection />
       <AboutSection />
     </>
   );

@@ -212,6 +212,7 @@ class Plugin:
                 "key_set": bool(yt.get("key")),
                 "title": yt.get("title", ""),
                 "privacy": yt.get("privacy") if yt.get("privacy") in cls._YT_PRIVACY else "public",
+                "latency": yt.get("latency") if yt.get("latency") in cls._YT_LATENCY else "normal",
                 "stream": {**cls._STREAM_DEFAULTS, **(yt.get("stream") or {})},
                 "chat_channel": yt.get("chat_channel", ""),
                 "chat_source": cls._yt_chat_source(cfg),
@@ -483,6 +484,10 @@ class Plugin:
     _YT_API = "https://www.googleapis.com/youtube/v3/"
     _YT_GAMING = "20"                          # catégorie « Jeux vidéo »
     _YT_PRIVACY = ("public", "unlisted", "private")
+    # contentDetails.latencyPreference de liveBroadcasts. « normal » ≈ 20 s de
+    # retard (mesuré par dreemur-e, #1) ; ultraLow ≈ 5 s mais YouTube y coupe
+    # certaines options (sous-titres, 1440p et plus). Défaut YouTube = normal.
+    _YT_LATENCY = ("normal", "low", "ultraLow")
     _yt_device = None
 
     @classmethod
@@ -662,6 +667,7 @@ class Plugin:
         yt = cls._yt_cfg(cfg)
         title = (yt.get("title") or "").strip() or "BoneCast live"
         privacy = yt.get("privacy") if yt.get("privacy") in cls._YT_PRIVACY else "public"
+        latency = yt.get("latency") if yt.get("latency") in cls._YT_LATENCY else "normal"
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         st, body = await cls._yt_api(
@@ -671,7 +677,8 @@ class Plugin:
                                   "selfDeclaredMadeForKids": False},
                        # autoStart : YouTube passe le live à l'antenne dès que
                        # le flux arrive ; pas de phase « test » sans moniteur.
-                       "contentDetails": {"enableAutoStart": True,
+                       "contentDetails": {"latencyPreference": latency,
+                                          "enableAutoStart": True,
                                           "enableAutoStop": True,
                                           "monitorStream": {"enableMonitorStream": False}}})
         if st not in (200, 201):
@@ -765,6 +772,8 @@ class Plugin:
             yt["title"] = s["title"].strip()[:100]
         if s.get("privacy") in cls._YT_PRIVACY:
             yt["privacy"] = s["privacy"]
+        if s.get("latency") in cls._YT_LATENCY:
+            yt["latency"] = s["latency"]
         if isinstance(s.get("chat_channel"), str):
             yt["chat_channel"] = s["chat_channel"].strip()
         if isinstance(s.get("key"), str):
@@ -1458,8 +1467,19 @@ class Plugin:
     async def _stop_camera_feeder(cls):
         # pkill ciblé sur NOTRE script : un « pkill -f gst_camera.py » tuait aussi
         # le feeder de Steamcord (même nom de fichier, autre plugin).
-        from asyncio import create_subprocess_exec
+        from asyncio import create_subprocess_exec, sleep, wait_for
         from subprocess import DEVNULL
+        # D'abord SIGTERM et on LAISSE le feeder se déconnecter proprement de
+        # gamescope (pause, fin de l'image en cours, puis NULL) : l'arracher en
+        # pleine image fait planter gamescope (30/09, SIGSEGV paint_pipewire →
+        # session de jeu relancée). Le kill ne sert plus que de filet.
+        fd0 = cls._camera_feeder
+        if fd0 is not None and fd0.returncode is None:
+            try:
+                fd0.terminate()
+                await wait_for(fd0.wait(), timeout=3)
+            except Exception:
+                pass
         try:
             killer = await create_subprocess_exec(
                 "pkill", "-f", str(cls._feeder_script()),
@@ -1812,11 +1832,88 @@ class Plugin:
         os.makedirs(path, exist_ok=True)
         return path
 
+    # Carte SD, disque externe (#1 : « out of space ») : tout système de fichiers
+    # monté sous /run/media, /media ou /mnt où l'utilisateur peut écrire. Les
+    # enregistrements vont dans <disque>/BoneCast. Stocké en config globale (pas
+    # par plateforme : c'est le même fichier quel que soit le live).
+    _MEDIA_ROOTS = ("/run/media/", "/media/", "/mnt/")
+
+    @classmethod
+    def _external_drives(cls):
+        seen, out = set(), []
+        try:
+            with open("/proc/self/mounts") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            return out
+        for line in lines:
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            target = parts[1].replace("\\040", " ")
+            if parts[2] in ("autofs", "tmpfs", "proc", "sysfs", "squashfs"):
+                continue
+            if not target.startswith(cls._MEDIA_ROOTS) or target in seen:
+                continue
+            seen.add(target)
+            if os.path.isdir(target) and os.access(target, os.W_OK):
+                out.append(target)
+        return out
+
+    @staticmethod
+    def _free_gb(path):
+        import shutil as _sh
+        try:
+            return round(_sh.disk_usage(path).free / 1e9, 1)
+        except OSError:
+            return None
+
+    @classmethod
+    def _record_dir(cls):
+        """Dossier choisi s'il est encore là (carte SD retirée → stockage interne)."""
+        drive = (cls._load_cfg().get("record_drive") or "").strip()
+        if drive and drive in cls._external_drives():
+            path = os.path.join(drive, "BoneCast")
+            try:
+                os.makedirs(path, exist_ok=True)
+                return path
+            except OSError as e:
+                logger.warning(f"[record] {path} inutilisable ({e!r}) → stockage interne")
+        elif drive:
+            logger.info(f"[record] {drive} absent → stockage interne")
+        return cls._videos_dir()
+
+    @classmethod
+    async def get_record_locations(cls):
+        drive = (cls._load_cfg().get("record_drive") or "").strip()
+        drives = cls._external_drives()
+        home = cls._videos_dir()
+        opts = [{"id": "", "path": home, "internal": True, "free_gb": cls._free_gb(home)}]
+        for d in drives:
+            opts.append({"id": d, "path": os.path.join(d, "BoneCast"),
+                         "name": os.path.basename(d.rstrip("/")) or d,
+                         "internal": False, "free_gb": cls._free_gb(d)})
+        return {"selected": drive if drive in drives else "", "options": opts,
+                "missing": drive if drive and drive not in drives else ""}
+
+    @classmethod
+    async def set_record_drive(cls, drive: str = ""):
+        drive = (drive or "").strip()
+        if drive and drive not in cls._external_drives():
+            return {"ok": False, "error": "not_available"}
+        cfg = cls._load_cfg()
+        if drive:
+            cfg["record_drive"] = drive
+        else:
+            cfg.pop("record_drive", None)
+        cls._save_cfg(cfg)
+        return {"ok": True}
+
     @classmethod
     def _new_record_path(cls):
         from datetime import datetime
         name = datetime.now().strftime("bonecast-%Y%m%d-%H%M%S.mkv")
-        return os.path.join(cls._videos_dir(), name)
+        return os.path.join(cls._record_dir(), name)
 
     # ── BRB : pause à l'antenne sans couper le live ────────────────────────────
     # Le feeder remplace lui-même les images du jeu par une image de pause (fond
@@ -1873,6 +1970,11 @@ class Plugin:
         cls._stream_proc = None
         was = cls._stream_platform
         cls._stream_platform = None
+        # La capture s'arrête AVANT ffmpeg : sinon ffmpeg ferme le tuyau, et le
+        # feeder se retrouve à quitter au milieu d'une image (gamescope SIGSEGV,
+        # voir _stop_camera_feeder). ffmpeg lit alors la fin du tuyau et termine
+        # le fichier normalement.
+        await cls._stop_camera_feeder()
         if proc is not None and proc.returncode is None:
             try:
                 # SIGINT = ffmpeg ferme la session RTMP proprement (FCUnpublish) →
@@ -1891,6 +1993,7 @@ class Plugin:
                 pass
         # BRB éventuel : tuer le writer lavfi sans relancer le feeder (le live
         # est fini) ; brb_stop ne relance le feeder que si le stream tourne.
+        # (La capture est déjà arrêtée proprement AVANT ffmpeg, plus haut.)
         await cls.brb_stop()
         await cls._stop_camera_feeder()
         await cls._audio_bridge_stop()           # remet Vesktop sur la vraie sortie

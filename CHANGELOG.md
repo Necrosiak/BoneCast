@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.5.1 — 2026-09-30
+
+Requested and tested by [dreemur-e](https://github.com/dreemur-e) in
+[#1](https://github.com/Necrosiak/BoneCast/issues/1).
+
+### Fix: stopping a stream or recording could restart Gaming Mode
+
+Stopping could make gamescope crash, which closes the game and restarts the
+Steam session. This comes from a bug in gamescope itself: it can crash if a
+screen capture disconnects while it is drawing a frame for it. BoneCast used to
+cut the capture off abruptly; it now pauses it first, lets gamescope finish the
+frame, and only then disconnects. Every stop in testing since has been clean,
+including a 23-minute recording and a Twitch live.
+
+### Save recordings to an SD card or an external drive
+
+A new **Save recordings to** choice in Settings lists the internal storage and
+every SD card or external drive that is plugged in, with its free space.
+Recordings go into a `BoneCast` folder on that drive. If the drive isn't there
+when you record, BoneCast saves to the internal storage instead.
+
+### YouTube stream latency
+
+When you're logged in to YouTube, pick the latency of your live: **Normal**
+(about 20 s, best quality), **Low** (about 10 s) or **Ultra-low** (about 5 s,
+without captions or 1440p and above). It applies to the next live.
+
+### Animated pause screen
+
+Besides an image, the `BoneCast-BRB` folder now takes a looping video:
+`brb.mp4`, `brb.webm`, `brb.mkv`, `brb.mov` or `brb.gif`. Its sound is not
+used. Animated `.webp` files can't be decoded, so convert them to `.gif` or
+`.mp4`.
+
+### Settings tab
+
+- Your Twitch and YouTube accounts now sit together in an **Accounts**
+  section, one line each, with *Log out* next to them. Logging out of YouTube
+  is no longer in the Live tab, so it can't be tapped by mistake during a
+  live.
+
 ## 0.5.0 — 2026-09-29
 
 ### Log in with YouTube

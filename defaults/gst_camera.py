@@ -80,6 +80,37 @@ def open_device_out():
 # ── Sortie tuyau + écran pause (mode --stdout) ─────────────────────────────
 _write_lock = threading.Lock()   # une image entière à la fois (pause vs capture)
 BRB = {"on": False, "frame": None}
+CUR = {"pipe": None}             # pipeline de capture en cours (pour l'arrêt propre)
+_exiting = threading.Event()
+
+
+def graceful_exit(reason):
+    """Quitte SANS arracher le flux à gamescope.
+
+    Mesuré le 30/09 (et déjà vu le 27/09) : gamescope 3.16.28 plante (SIGSEGV
+    dans paint_pipewire → vulkan_screenshot) quand un client disparaît pendant
+    qu'il dessine une image : PipeWire détruit le tampon (destroy_buffer) sous
+    ses pieds. Bug de gamescope (cf. PR amont #2021, jamais fusionnée : la
+    gestion de ses tampons n'est pas thread-safe) → la session de jeu redémarre.
+    Un os._exit en pleine image était le déclencheur. On met d'abord le flux en
+    pause (gamescope arrête de nous dessiner), on laisse finir l'image en cours,
+    puis on se déconnecte proprement."""
+    if _exiting.is_set():
+        return
+    _exiting.set()
+    log.info(f"arrêt propre de la capture ({reason})")
+    stop_brb_video()
+    pipe = CUR["pipe"]
+    try:
+        if pipe is not None:
+            pipe.set_state(Gst.State.PAUSED)
+            pipe.get_state(1 * Gst.SECOND)
+            time.sleep(0.3)
+            pipe.set_state(Gst.State.NULL)
+            pipe.get_state(2 * Gst.SECOND)
+    except Exception as e:
+        log.warning(f"arrêt propre: {e!r}")
+    os._exit(0)
 
 
 def write_frame(fd, data):
@@ -113,13 +144,20 @@ PAUSE_FRAME = _pause_frame() if STDOUT_MODE else None
 # Absente ou illisible = l'écran pause par défaut ci-dessus.
 BRB_DIR = os.path.expanduser("~/BoneCast-BRB")
 BRB_NAMES = ("brb.png", "brb.jpg", "brb.jpeg", "brb.webp")
+# Animé (#1) : décodé par ffmpeg, déjà requis pour streamer, plutôt que par les
+# décodeurs GStreamer, qui varient d'un système à l'autre. Une vidéo passe avant
+# une image fixe. ⚠️ ffmpeg ne décode pas le webp ANIMÉ (limite connue) → gif/mp4.
+BRB_VIDEO_NAMES = ("brb.mp4", "brb.webm", "brb.mkv", "brb.mov", "brb.gif")
 BRB_README = """BoneCast - custom pause screen (BRB)
 
-Put an image named brb.png (or brb.jpg / brb.webp) in this folder.
+Put a file named brb.png (or brb.jpg / brb.webp) in this folder, or an
+animated one: brb.mp4, brb.webm, brb.mkv, brb.mov or brb.gif (it loops).
 BoneCast shows it on your stream when you press Pause (BRB).
 
 - 16:9 works best (1280x720 or 1920x1080); other sizes get black bars.
-- A new image is picked up the next time you press Pause.
+- A video's sound is not used: your stream keeps its own audio.
+- Animated .webp files are not supported: convert them to .gif or .mp4.
+- A new file is picked up the next time you press Pause.
 - Delete it to get the default pause screen back.
 """
 
@@ -128,11 +166,82 @@ def ensure_brb_dir():
     try:
         os.makedirs(BRB_DIR, exist_ok=True)
         readme = os.path.join(BRB_DIR, "README.txt")
-        if not os.path.exists(readme):
+        # Réécrit s'il a changé : c'est notre fichier, il suit les versions.
+        try:
+            with open(readme) as f:
+                current = f.read()
+        except OSError:
+            current = None
+        if current != BRB_README:
             with open(readme, "w") as f:
                 f.write(BRB_README)
     except OSError as e:
         log.warning(f"dossier BRB: {e!r}")
+
+
+BRB_VIDEO = {"proc": None}
+
+
+def stop_brb_video():
+    p = BRB_VIDEO["proc"]
+    BRB_VIDEO["proc"] = None
+    if p is not None and p.poll() is None:
+        # kill direct : ce ffmpeg ne fait que décoder (rien à finaliser), et plus
+        # personne ne lit son tuyau → bloqué en écriture, il ignorait le SIGTERM
+        # et le retour au jeu attendait 2 s (mesuré le 30/09).
+        try:
+            p.kill()
+            p.wait(timeout=1)
+        except Exception:
+            pass
+
+
+def start_brb_video():
+    """Lance la vidéo de pause en boucle ; chaque image décodée remplace
+    BRB["frame"], que le métronome envoie. True si la 1re image est arrivée."""
+    import subprocess
+    path = next((os.path.join(BRB_DIR, n) for n in BRB_VIDEO_NAMES
+                 if os.path.isfile(os.path.join(BRB_DIR, n))), None)
+    if not path:
+        return False
+    stop_brb_video()
+    BRB["frame"] = None              # sinon une image restée d une pause précédente passerait pour « démarré »
+    size = WIDTH * HEIGHT * 2
+    vf = (f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
+          f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps={FPS}")
+    try:
+        p = subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-nostdin", "-stream_loop", "-1", "-re", "-i", path,
+             "-an", "-vf", vf, "-pix_fmt", "yuyv422", "-f", "rawvideo", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    except OSError as e:
+        log.warning(f"écran pause animé impossible ({path}): {e!r}")
+        return False
+    BRB_VIDEO["proc"] = p
+    first = threading.Event()
+
+    def reader():
+        while BRB_VIDEO["proc"] is p:
+            buf = bytearray()
+            while len(buf) < size:
+                chunk = p.stdout.read(size - len(buf))
+                if not chunk:
+                    err = (p.stderr.read() or b"").decode(errors="ignore").strip()
+                    if BRB_VIDEO["proc"] is p:
+                        log.warning(f"écran pause animé arrêté ({path}): {err[:200]}")
+                    first.set()
+                    return
+                buf += chunk
+            BRB["frame"] = bytes(buf)
+            first.set()
+    threading.Thread(target=reader, daemon=True).start()
+    first.wait(3)
+    if BRB["frame"] is None:
+        log.warning(f"écran pause animé illisible ({path}) → image fixe ou écran par défaut")
+        stop_brb_video()
+        return False
+    log.info(f"écran pause animé : {path}")
+    return True
 
 
 def load_brb_image():
@@ -196,8 +305,7 @@ def start_metronome():
                 frame = (BRB["frame"] or PAUSE_FRAME) if BRB["on"] else LAST["frame"]
                 write_frame(OUT_FD, frame)
             except BrokenPipeError:
-                log.info("tuyau fermé par ffmpeg — arrêt du feeder")
-                os._exit(0)
+                graceful_exit("tuyau fermé par ffmpeg")
             except OSError:
                 pass
     threading.Thread(target=run, daemon=True).start()
@@ -207,15 +315,24 @@ def start_brb_listener():
     """Écran pause piloté par signaux, reçus par un thread dédié (sigwait) :
     indépendant de la boucle GLib, donc aussi pendant qu'une capture se relance.
     Les deux signaux sont bloqués AVANT que GStreamer ne crée ses threads."""
-    sigs = {signal.SIGUSR1, signal.SIGUSR2}
+    # SIGTERM aussi (arrêt demandé par le backend) : reçu ici, il passe par
+    # l'arrêt propre au lieu de tuer le process au milieu d'une image.
+    sigs = {signal.SIGUSR1, signal.SIGUSR2, signal.SIGTERM}
     signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
 
     def run():
         while True:
             sig = signal.sigwait(sigs)
+            if sig == signal.SIGTERM:
+                graceful_exit("SIGTERM")
+                continue
             if sig == signal.SIGUSR1:
                 # Chargée AVANT d'afficher : jamais une image à moitié prête.
-                BRB["frame"] = load_brb_image()
+                BRB["frame"] = None
+                if not start_brb_video():
+                    BRB["frame"] = load_brb_image()
+            else:
+                stop_brb_video()
             BRB["on"] = sig == signal.SIGUSR1
             log.info("écran pause " + ("affiché" if BRB["on"] else "retiré"))
     ensure_brb_dir()
@@ -332,6 +449,7 @@ def run_backend(backend, node, display):
     loop = GLib.MainLoop()
     ok = {"value": True}
     pipe = build_pipeline(backend, node=node, display=display)
+    CUR["pipe"] = pipe
     bus = pipe.get_bus()
     bus.add_signal_watch()
 
