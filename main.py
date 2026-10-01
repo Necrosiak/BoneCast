@@ -5,7 +5,7 @@ import os
 import sys
 from json import load, dump
 from pathlib import Path
-from asyncio import Lock, create_task
+from asyncio import Lock, create_task, current_task as _current_task
 from time import time
 
 from decky import logger, DECKY_PLUGIN_DIR  # type: ignore
@@ -121,6 +121,14 @@ class Plugin:
     _stream_proc = None                        # ffmpeg RTMP (live Twitch ou YouTube)
     _stream_platform = None                    # "twitch" | "youtube" | "record" (un seul à la fois)
     _camera_feeder = None                      # gst_camera.py --stdout → tuyau → ffmpeg
+    # Reprise du live (BoneCast #1, demandé par dreemur-e) : réseau coupé, ffmpeg
+    # mort, « Arrêter » par erreur ou redémarrage de la machine → pendant
+    # `resume_window` secondes le live peut reprendre SANS en créer un nouveau
+    # (même live YouTube, même lien pour les spectateurs).
+    _RESUME_CHOICES = (0, 15, 30, 60, 120)
+    _resume = None                             # {"platform", "until"} : reconnexion auto en cours
+    _yt_end_task = None                        # fin YouTube différée (arrêt manuel / reboot)
+    _stream_started = 0.0
     _TWITCH_INGEST = "rtmp://ingest.global-contribute.live-video.net/app"
     _OVERLAY_DEFAULTS = {"opacity": 62, "fontSize": 13, "width": 360,
                          "height": 460, "pos": "tr", "badges": True, "thirdParty": True}
@@ -132,7 +140,11 @@ class Plugin:
     _STREAM_DEFAULTS = {"resolution": "720p", "fps": 30, "bitrate": 4500,
                         "audio_bitrate": 160, "keyframe": 2,
                         "encoder": "auto", "mic": False, "discord_audio": False,
-                        "record": False}
+                        "record": False, "effort": "balanced"}
+    # Effort de l'encodeur LOGICIEL (x264) : moins d'effort = moins de CPU (le jeu
+    # garde ses images sur un Deck), plus d'effort = image plus nette au même débit.
+    # Idée de dreemur-e (BoneCast #1).
+    _X264_PRESETS = {"light": "superfast", "balanced": "veryfast", "quality": "faster"}
     _vaapi_ok = None                           # cache détection VAAPI (AMD/Intel)
     _nvenc_ok = None                           # cache détection NVENC (Nvidia)
     _x264_ok = None                            # cache détection libx264 (ffmpeg-free Fedora = absent)
@@ -679,7 +691,7 @@ class Plugin:
                        # le flux arrive ; pas de phase « test » sans moniteur.
                        "contentDetails": {"latencyPreference": latency,
                                           "enableAutoStart": True,
-                                          "enableAutoStop": True,
+                                          "enableAutoStop": cls._resume_window() < 60,
                                           "monitorStream": {"enableMonitorStream": False}}})
         if st not in (200, 201):
             raise RuntimeError(cls._yt_error(body, st))
@@ -702,8 +714,61 @@ class Plugin:
         return bid
 
     @classmethod
+    def _yt_schedule_end(cls, delay):
+        """Termine le live YouTube dans `delay` s, sauf reprise d'ici là. L'échéance
+        est aussi écrite dans la config : après un redémarrage, _main la reprend."""
+        from asyncio import sleep
+        if cls._yt_end_task is not None:
+            cls._yt_end_task.cancel()
+        cfg = cls._load_cfg()
+        if not cls._yt_cfg(cfg).get("broadcast_id"):
+            return
+        cls._yt_cfg(cfg)["broadcast_end_at"] = int(time() + delay)
+        cls._save_cfg(cfg)
+
+        async def _later():
+            await sleep(delay)
+            cls._yt_end_task = None
+            if cls._stream_platform == "youtube" or (cls._resume or {}).get("platform") == "youtube":
+                return                           # repris entre-temps
+            logger.info("[youtube] pas de reprise → live terminé")
+            await cls._yt_end_broadcast()
+        cls._yt_end_task = create_task(_later())
+
+    @classmethod
+    async def _yt_reuse_broadcast(cls):
+        """Un live YouTube de cette session est encore ouvert (coupure, Arrêter par
+        erreur, redémarrage) → on le reprend au lieu d'en créer un nouveau."""
+        bid = cls._yt_cfg().get("broadcast_id")
+        if not bid:
+            return False
+        try:
+            st, body = await cls._yt_api("GET", "liveBroadcasts",
+                                         params={"part": "status", "id": bid})
+            items = (body or {}).get("items") or [] if st == 200 else []
+            life = ((items[0].get("status") or {}).get("lifeCycleStatus") if items else None)
+        except Exception as e:
+            logger.warning(f"[youtube] état du live précédent: {e!r}")
+            life = None
+        if life in ("ready", "testStarting", "testing", "liveStarting", "live"):
+            if cls._yt_end_task is not None:
+                cls._yt_end_task.cancel()
+                cls._yt_end_task = None
+            cfg = cls._load_cfg()
+            cls._yt_cfg(cfg).pop("broadcast_end_at", None)
+            cls._save_cfg(cfg)
+            logger.info(f"[youtube] reprise du live {bid} ({life})")
+            return True
+        logger.info(f"[youtube] live précédent {bid} non repris ({life})")
+        await cls._yt_end_broadcast()            # range broadcast_id / indice du chat
+        return False
+
+    @classmethod
     async def _yt_end_broadcast(cls):
         """Termine le live côté YouTube (l'arrêt auto prend sinon ~1 min)."""
+        if cls._yt_end_task is not None and cls._yt_end_task is not _current_task():
+            cls._yt_end_task.cancel()
+        cls._yt_end_task = None
         bid = cls._yt_cfg().get("broadcast_id")
         if not bid:
             return
@@ -714,6 +779,7 @@ class Plugin:
             pass
         cfg = cls._load_cfg()
         cls._yt_cfg(cfg).pop("broadcast_id", None)
+        cls._yt_cfg(cfg).pop("broadcast_end_at", None)
         cls._save_cfg(cfg)
         cls._yt_write_live_hint("", "")
 
@@ -1410,8 +1476,15 @@ class Plugin:
         m1 = (await cls._pactl("load-module", "module-null-sink",
               f"sink_name={cls._DISCORD_SINK}",
               "sink_properties=device.description=BoneCast-Discord")).strip()
+        # ⚠️ « source=<sink>.monitor » seul NE SUFFIT PAS : WirePlumber voit une
+        # cible de type sortie pour un flux de capture et se rabat sur le monitor
+        # de la sortie PAR DÉFAUT = le casque → casque renvoyé dans le casque avec
+        # 60 ms de retard = écho infini pendant tout le live (mesuré 01/10,
+        # pw-link). stream.capture.sink + dont_move = le bon monitor, et jamais
+        # de repli sur un autre.
         m2 = (await cls._pactl("load-module", "module-loopback",
-              f"source={cls._DISCORD_SINK}.monitor",
+              f"source={cls._DISCORD_SINK}.monitor", "source_dont_move=true",
+              "source_input_properties=stream.capture.sink=true",
               f"sink={cls._ba_real_sink}", "latency_msec=60")).strip()
         cls._ba_modules = [m for m in (m1, m2) if m.isdigit()]
         await cls._move_vesktop(cls._DISCORD_SINK)
@@ -1557,6 +1630,11 @@ class Plugin:
         # lancements rapprochés (Twitch puis YouTube, ou double appui) passaient
         # tous les deux → deux ffmpeg, dont un orphelin. Le verrou fait attendre
         # le second, qui voit alors le live en cours et répond « busy ».
+        cls._resume = None                        # l'utilisateur reprend la main
+        return await cls._start_stream_locked(record_only, platform)
+
+    @classmethod
+    async def _start_stream_locked(cls, record_only=False, platform="twitch"):
         if cls._start_stream_lock is None:
             cls._start_stream_lock = Lock()
         async with cls._start_stream_lock:
@@ -1604,8 +1682,9 @@ class Plugin:
                 # à l'antenne (titre, visibilité, démarrage automatique).
                 try:
                     key, ingest = await cls._yt_ensure_stream()
-                    await cls._yt_create_broadcast()
-                    yt_broadcast = True
+                    if not await cls._yt_reuse_broadcast():
+                        await cls._yt_create_broadcast()
+                        yt_broadcast = True
                 except Exception as e:
                     logger.warning(f"[youtube] préparation du live: {e!r}")
                     return {"ok": False, "error": "yt_api", "hint": str(e)}
@@ -1703,7 +1782,9 @@ class Plugin:
         else:
             vf = ([f"scale={w}:{h}"] if w else []) + [f"fps={fps}"]
             args += ["-vf", ",".join(vf),
-                     "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+                     "-c:v", "libx264",
+                     "-preset", cls._X264_PRESETS.get(st.get("effort"), "veryfast"),
+                     "-tune", "zerolatency",
                      "-pix_fmt", "yuv420p",
                      "-g", str(gop), "-keyint_min", str(gop),
                      "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
@@ -1756,6 +1837,7 @@ class Plugin:
                 cls._mic_active = True
                 create_task(cls._discover_mic_so(mic_src, cls._stream_proc.pid))
             cls._stream_platform = want
+            cls._stream_started = time()
             logger.info(f"[stream] démarré : {want}")
             return {"ok": True}
         except Exception as e:
@@ -1790,7 +1872,95 @@ class Plugin:
         if cls._stream_proc is not proc:
             return                               # arrêt demandé : stop_stream s'en charge
         logger.warning(f"[stream] ffmpeg s'est arrêté seul (code {proc.returncode})")
-        await cls.stop_stream()
+        plat = cls._stream_platform
+        win = cls._resume_window()
+        now = time()
+        until = None
+        if win and plat in ("twitch", "youtube"):
+            prev = cls._resume_until_prev
+            if prev and now < prev and now - cls._stream_started < 20:
+                until = prev                     # la reprise vient de retomber : même fenêtre
+            elif now - cls._stream_started >= 10:
+                until = now + win                # coupure d'un live qui tournait
+            # < 10 s sans reprise en cours = clé refusée, mauvais réglage… :
+            # relancer en boucle ne ferait que répéter l'erreur.
+        if until is None:
+            await cls.stop_stream()
+            return
+        await cls._teardown_stream()
+        cls._resume = {"platform": plat, "until": until}
+        cls._resume_until_prev = until
+        logger.info(f"[stream] reprise auto : {plat}, jusqu'à {int(until - now)} s")
+        create_task(cls._auto_resume(cls._resume))
+
+    _resume_until_prev = 0.0
+
+    @classmethod
+    def _resume_window(cls):
+        v = cls._load_cfg().get("resume_window", 15)
+        return v if v in cls._RESUME_CHOICES else 15
+
+    @classmethod
+    async def get_resume_window(cls):
+        return {"seconds": cls._resume_window()}
+
+    @classmethod
+    async def set_resume_window(cls, seconds=15):
+        try:
+            seconds = int(seconds)
+        except (TypeError, ValueError):
+            return {"ok": False}
+        if seconds not in cls._RESUME_CHOICES:
+            return {"ok": False}
+        cfg = cls._load_cfg()
+        cfg["resume_window"] = seconds
+        cls._save_cfg(cfg)
+        return {"ok": True, "seconds": seconds}
+
+    @classmethod
+    async def _ingest_reachable(cls, platform):
+        """Le serveur RTMP répond ? Évite de relancer capture + ffmpeg toutes les
+        3 s pendant que le wifi redémarre (chaque relance = un client gamescope)."""
+        from asyncio import open_connection, wait_for
+        from urllib.parse import urlparse
+        cfg = cls._load_cfg()
+        if platform == "youtube":
+            yt = cfg.get("youtube") or {}
+            url = yt.get("api_ingest") or yt.get("ingest") or cls._YT_INGEST
+        else:
+            url = cfg.get("ingest") or cls._TWITCH_INGEST
+        u = urlparse(url)
+        port = u.port or (443 if u.scheme == "rtmps" else 1935)
+        try:
+            _r, w = await wait_for(open_connection(u.hostname, port), timeout=3)
+            w.close()
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    async def _auto_resume(cls, ticket):
+        from asyncio import sleep
+        plat = ticket["platform"]
+        while cls._resume is ticket and time() < ticket["until"]:
+            if await cls._ingest_reachable(plat):
+                if cls._resume is not ticket:
+                    return
+                r = await cls._start_stream_locked(False, plat)
+                if cls._resume is not ticket:
+                    return                       # Arrêter / Démarrer pendant la relance
+                if r.get("ok"):
+                    cls._resume = None
+                    logger.info(f"[stream] live repris : {plat}")
+                    return
+                logger.warning(f"[stream] reprise ratée : {r.get('error')}")
+            await sleep(3)
+        if cls._resume is ticket:
+            cls._resume = None
+            cls._resume_until_prev = 0.0
+            logger.warning("[stream] fenêtre de reprise écoulée → live terminé")
+            if plat == "youtube":
+                await cls._yt_end_broadcast()
 
     @classmethod
     async def _discover_mic_so(cls, mic_src, pid):
@@ -1993,11 +2163,30 @@ class Plugin:
 
     @classmethod
     async def stop_stream(cls):
+        # Arrêter pendant une reconnexion = on abandonne la reprise auto.
+        resuming = cls._resume
+        cls._resume = None
+        cls._resume_until_prev = 0.0
+        was = cls._stream_platform or (resuming or {}).get("platform")
+        rec = await cls._teardown_stream()
+        if was == "youtube" and (cls._yt_cfg().get("oauth") or {}).get("access_token"):
+            # « Arrêter » par erreur : le live YouTube reste ouvert le temps de
+            # la fenêtre de reprise ; Démarrer le reprend, sinon il se termine.
+            win = cls._resume_window()
+            if win:
+                cls._yt_schedule_end(win)
+            else:
+                await cls._yt_end_broadcast()
+        logger.info(f"[stream] live arrêté{' — enregistré: ' + rec if rec else ''}")
+        return {"ok": True, "record_path": rec}
+
+    @classmethod
+    async def _teardown_stream(cls):
+        """Range capture, ffmpeg, pont audio et micro ; laisse le live YouTube."""
         import signal as _sig
         from asyncio import wait_for
         proc = cls._stream_proc
         cls._stream_proc = None
-        was = cls._stream_platform
         cls._stream_platform = None
         # La capture s'arrête AVANT ffmpeg : sinon ffmpeg ferme le tuyau, et le
         # feeder se retrouve à quitter au milieu d'une image (gamescope SIGSEGV,
@@ -2027,13 +2216,10 @@ class Plugin:
         await cls._stop_camera_feeder()
         await cls._audio_bridge_stop()           # remet Vesktop sur la vraie sortie
         cls._reset_mic_state()
-        if was == "youtube" and (cls._yt_cfg().get("oauth") or {}).get("access_token"):
-            await cls._yt_end_broadcast()
         rec = cls._record_path
         cls._record_path = None
         cls._record_only = False
-        logger.info(f"[stream] live arrêté{' — enregistré: ' + rec if rec else ''}")
-        return {"ok": True, "record_path": rec}
+        return rec
 
     @classmethod
     async def get_stream_status(cls):
@@ -2046,7 +2232,10 @@ class Plugin:
                 "mic": live and cls._mic_active,
                 "mic_muted": cls._mic_muted, "brb": live and brb,
                 "record_path": cls._record_path if live else None,
-                "record_only": live and cls._record_only}
+                "record_only": live and cls._record_only,
+                "resuming": None if live or not cls._resume else cls._resume["platform"],
+                "resume_left": 0 if live or not cls._resume
+                else max(0, int(cls._resume["until"] - time()))}
 
     # ── Auto-update (release-based, comme le reste de la suite) ───────────────
     # NB : il y avait ICI un `@classmethod` orphelin, resté d'un en-tête « Cycle
@@ -2157,6 +2346,15 @@ class Plugin:
     async def _main(cls):
         logger.info("BoneCast backend chargé")
         create_task(cls._autoupdate_check())
+        # Live YouTube encore ouvert d'avant (redémarrage, crash, mise à jour du
+        # plugin) : Démarrer le reprend pendant la fenêtre, sinon on le termine.
+        try:
+            y = cls._yt_cfg()
+            if y.get("broadcast_id"):
+                end_at = y.get("broadcast_end_at") or (time() + cls._resume_window())
+                cls._yt_schedule_end(max(0, end_at - time()))
+        except Exception as e:
+            logger.warning(f"[youtube] live resté ouvert: {e!r}")
 
     @classmethod
     async def _unload(cls):

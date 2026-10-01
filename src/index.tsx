@@ -209,6 +209,7 @@ function StreamControls({ platform, color, ready, beforeStart, clip }: {
   const [brb, setBrb] = useState(false);
   const [brbBusy, setBrbBusy] = useState(false);
   const [clipBusy, setClipBusy] = useState(false);
+  const [resumeLeft, setResumeLeft] = useState(0);   // > 0 : reconnexion auto en cours
 
   // Un enregistrement local appartient à l'onglet qui l'a lancé ; on le montre
   // des deux côtés pour pouvoir l'arrêter, comme un live.
@@ -217,7 +218,10 @@ function StreamControls({ platform, color, ready, beforeStart, clip }: {
   const recOnly = live === "record";
 
   const apply = (r: any) => {
-    const p = r?.streaming ? (r?.platform || null) : null;
+    // Reconnexion auto (coupure réseau…) : le live compte toujours comme le
+    // nôtre, le bouton reste « Arrêter » (arrêter = abandonner la reprise).
+    const p = r?.streaming ? (r?.platform || null) : (r?.resuming || null);
+    setResumeLeft(!r?.streaming && r?.resuming ? (r?.resume_left || 0) : 0);
     setLive((prev) => {
       if (prev && (prev === platform || prev === "record") && !p) setMsg(t("live_stopped"));
       return p;
@@ -232,7 +236,7 @@ function StreamControls({ platform, color, ready, beforeStart, clip }: {
     }).catch(() => {});
     const poll = () => call<[], any>("get_stream_status").then(apply).catch(() => {});
     poll();
-    const id = setInterval(poll, 4000);
+    const id = setInterval(poll, 2000);
     return () => clearInterval(id);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -323,6 +327,13 @@ function StreamControls({ platform, color, ready, beforeStart, clip }: {
           {busy ? "…" : <><IcBroadcast /> {mine ? (recOnly ? t("stop_record") : t("stop_live")) : t("go_live")}</>}
         </ActionCard>
       </PanelSectionRow>
+      {mine && resumeLeft > 0 && (
+        <PanelSectionRow>
+          <div style={{ fontSize: 12, color: "#fff", textAlign: "center", opacity: 0.85 }}>
+            {t("reconnecting", { s: resumeLeft })}
+          </div>
+        </PanelSectionRow>
+      )}
       {!live && (
         <PanelSectionRow>
           <ActionCard color={color} disabled={busy} onClick={startRecordOnly}>
@@ -730,6 +741,30 @@ function RecordLocation() {
   );
 }
 
+// Délai pendant lequel un live coupé (réseau, Arrêter par erreur, redémarrage)
+// peut reprendre au même endroit. Réglage commun aux deux plateformes.
+function ResumeWindow() {
+  const [sec, setSec] = useState<number | null>(null);
+  useEffect(() => {
+    call<[], any>("get_resume_window").then((r: any) => setSec(r?.seconds ?? 15)).catch(() => {});
+  }, []);
+  if (sec === null) return null;
+  return (
+    <PanelSectionRow>
+      <Dropdown strDefaultLabel={t("resume_window")} selectedOption={sec}
+        rgOptions={[
+          { data: 0, label: t("resume_off") },
+          ...[15, 30, 60, 120].map((v) => ({ data: v, label: v < 60 ? `${v} s` : `${v / 60} min` })),
+        ]}
+        onChange={(e: any) => call<[number], any>("set_resume_window", e.data)
+          .then((r: any) => r?.ok && setSec(r.seconds)).catch(() => {})} />
+      <div style={{ fontSize: 10, opacity: 0.6, color: "#fff", marginTop: 4 }}>
+        {t("resume_desc")}
+      </div>
+    </PanelSectionRow>
+  );
+}
+
 function StreamSettings({ platform }: { platform: "twitch" | "youtube" }) {
   const [encoders, setEncoders] = useState<string[]>(["software"]);
   const [steamcord, setSteamcord] = useState(false);
@@ -794,6 +829,18 @@ function StreamSettings({ platform }: { platform: "twitch" | "youtube" }) {
               ? [{ data: "vaapi", label: t("enc_vaapi") }] : []),
           ]} onChange={(e: any) => pushSt({ encoder: e.data })} />
       </PanelSectionRow>
+      {/* Effort x264 : seulement quand l'encodage se fait au processeur. */}
+      {(st.encoder === "software" || (st.encoder === "auto"
+        && !encoders.includes("nvenc") && !encoders.includes("vaapi"))) && (
+        <PanelSectionRow>
+          <Dropdown strDefaultLabel={t("effort")} selectedOption={st.effort || "balanced"}
+            rgOptions={[
+              { data: "light", label: t("effort_light") },
+              { data: "balanced", label: t("effort_balanced") },
+              { data: "quality", label: t("effort_quality") },
+            ]} onChange={(e: any) => pushSt({ effort: e.data })} />
+        </PanelSectionRow>
+      )}
       <PanelSectionRow>
         <div style={{ fontSize: 10, opacity: 0.6, color: "#fff" }}>
           {encoders.includes("nvenc")
@@ -824,6 +871,7 @@ function StreamSettings({ platform }: { platform: "twitch" | "youtube" }) {
       </PanelSectionRow>
       {/* Où vont les enregistrements : stockage interne, carte SD, disque externe (#1). */}
       <RecordLocation />
+      <ResumeWindow />
       {/* Écran pause perso : image déposée à la main depuis le mode Bureau. */}
       <PanelSectionRow>
         <div style={{ fontSize: 11, opacity: 0.75, color: "#fff", lineHeight: 1.5 }}>

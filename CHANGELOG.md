@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.5.3 — 2026-10-01
+
+### Resume a stream after a drop
+
+Requested by [dreemur-e](https://github.com/dreemur-e) in
+[#1](https://github.com/Necrosiak/BoneCast/issues/1).
+
+A new **Resume after a drop** setting (Off, 15 s by default, 30 s, 1 min or
+2 min), shared by Twitch and YouTube:
+
+- **Network drop or encoder crash:** the stream no longer ends. BoneCast waits
+  until the streaming server answers again, then goes live again on its own,
+  showing "Reconnecting… X s left" in the meantime. Stop cancels it.
+- **Stop pressed by mistake (YouTube):** the YouTube live stays open for the
+  chosen time. Going live again continues the **same live**, with the same
+  link and the same chat, instead of starting a new one.
+- **Restart or crash of the device:** going live again within the chosen time
+  after the restart also continues the same YouTube live. Otherwise BoneCast
+  ends it cleanly.
+- A stream that fails within its first seconds (wrong key, bad setting) is not
+  retried in a loop.
+
+### Encoder effort
+
+Also suggested by dreemur-e. When the stream is encoded by the processor (no
+hardware encoder, like on the Steam Deck), a new **Encoder effort** setting
+picks the trade-off: *Light* uses less CPU so the game keeps its frame rate,
+*Quality* gives a sharper picture at the same bitrate for more CPU, and
+*Balanced* is what BoneCast used until now.
+
+### Fix
+
+- **Endless echo during a stream when Steamcord is installed.** The link that
+  plays Discord back in your headset while BoneCast keeps it out of the stream
+  could attach to your headset's own sound instead, sending it back into the
+  headset 60 ms later, over and over. It now always listens to Discord only.
+
 ## 0.5.2 — 2026-10-01
 
 ### No more frozen picture when switching games
