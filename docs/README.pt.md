@@ -87,7 +87,7 @@ igualmente valiosos.
 
 ## Créditos
 
-Criado e mantido por **Necrosiak**. Faz parte da suíte de plugins Necrosiak para o Modo Jogo do Steam.
+Criado e mantido por **Necrosiak**. Faz parte da suíte de plugins Necrosiak para o Modo Jogo do Steam. Obrigado a [dreemur-e](https://github.com/dreemur-e) pelos testes no Steam Deck OLED, pelas ideias para o YouTube e pelo vigia da captura que acabou com a imagem congelada ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
 ## Aviso sobre IA
 

@@ -87,7 +87,7 @@ genauso wertvoll.
 
 ## Credits
 
-Erstellt und gepflegt von **Necrosiak**. Teil der Necrosiak-Plugin-Suite für den Steam-Spielmodus.
+Erstellt und gepflegt von **Necrosiak**. Teil der Necrosiak-Plugin-Suite für den Steam-Spielmodus. Danke an [dreemur-e](https://github.com/dreemur-e) für die Tests auf dem Steam Deck OLED, die YouTube-Ideen und den Capture-Watchdog, der das eingefrorene Bild behoben hat ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
 ## KI-Hinweis
 

@@ -86,7 +86,7 @@ BoneCast нацелен на **все дистрибутивы Linux**, спос
 
 ## Авторы
 
-Создано и поддерживается **Necrosiak**. Часть набора плагинов Necrosiak для игрового режима Steam.
+Создано и поддерживается **Necrosiak**. Часть набора плагинов Necrosiak для игрового режима Steam. Спасибо [dreemur-e](https://github.com/dreemur-e) за тесты на Steam Deck OLED, идеи для YouTube и сторожа захвата, который победил зависшую картинку ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
 ## Об использовании ИИ
 

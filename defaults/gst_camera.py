@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # BoneCast : lancé avec --stdout, ce feeder écrit ses images brutes (YUY2
-# 1280x720@30) sur sa sortie standard, reliée par un tuyau à l'entrée de ffmpeg.
+# WxH@fps, `--size WxH`, 1280x720 par défaut) sur sa sortie standard, reliée par un tuyau à l'entrée de ffmpeg.
 # Plus de /dev/video42 : le module v4l2loopback n'est pas chargé sur SteamOS
 # (BoneCast #1, Steam Deck OLED) et le charger exige sudo. L'écran pause (BRB)
 # est alors fabriqué ici : SIGUSR1 = pause, SIGUSR2 = retour au jeu.
@@ -28,6 +28,7 @@ from subprocess import getoutput, run, TimeoutExpired
 from gi import require_version  # type: ignore
 
 STDOUT_MODE = "--stdout" in sys.argv
+PROBE_MODE = "--probe-size" in sys.argv   # affiche la taille native de l'écran jeu, puis quitte
 OUT_FD = None
 if STDOUT_MODE:
     # La sortie standard ne transporte plus que des images : on la garde sur un
@@ -35,7 +36,7 @@ if STDOUT_MODE:
     # message de bibliothèque ne puisse jamais s'intercaler dans une image.
     OUT_FD = os.dup(1)
     os.dup2(2, 1)
-logging.basicConfig(level=logging.INFO, stream=sys.stderr if STDOUT_MODE else sys.stdout,
+logging.basicConfig(level=logging.INFO, stream=sys.stderr if (STDOUT_MODE or PROBE_MODE) else sys.stdout,
                     format="%(levelname)s %(name)s: %(message)s", force=True)
 log = logging.getLogger("screencam")
 
@@ -44,7 +45,40 @@ from gi.repository import Gst, GLib  # type: ignore
 
 DEVICE = "/dev/video42"
 # Discord/Chromium aime un format simple et borné. YUY2 720p30 = sûr.
-WIDTH, HEIGHT, FPS = 1280, 720, 30
+WIDTH, HEIGHT = 1280, 720   # mode webcam virtuelle : toujours 720p ; en mode tuyau, voir --size
+
+
+def _arg_fps(default=30):
+    """Cadence demandée par le backend (`--fps 60`). Avant, le feeder était figé
+    à 30 i/s : le réglage « 60 fps » ne faisait que DOUBLER chaque image côté
+    ffmpeg (60 fps affichés, 30 fps réels). Borné à 10-60."""
+    try:
+        v = int(sys.argv[sys.argv.index("--fps") + 1])
+    except (ValueError, IndexError):
+        return default
+    return max(10, min(60, v))
+
+
+FPS = _arg_fps()
+
+
+def _arg_size(default=(1280, 720)):
+    """Taille de capture demandée par le backend (`--size 1280x800`), pour que le
+    flux soit capturé À la résolution choisie (720p = 1280x720, 800p = 1280x800,
+    source = taille native) au lieu d'être toujours réduit à 1280x720 puis
+    remis à l'échelle par ffmpeg. Dimensions paires (YUY2), bornées."""
+    try:
+        w, h = sys.argv[sys.argv.index("--size") + 1].lower().split("x")
+        w, h = int(w) & ~1, int(h) & ~1
+    except (ValueError, IndexError):
+        return default
+    if not (160 <= w <= 3840 and 120 <= h <= 2160):
+        return default
+    return w, h
+
+
+if STDOUT_MODE:
+    WIDTH, HEIGHT = _arg_size()
 
 # --- Écriture write() dans le loopback (remplace v4l2sink MMAP + keepalive) ---
 # v4l2loopback n'accepte qu'UN SEUL lecteur en streaming : l'ancien lecteur
@@ -82,6 +116,27 @@ _write_lock = threading.Lock()   # une image entière à la fois (pause vs captu
 BRB = {"on": False, "frame": None}
 CUR = {"pipe": None}             # pipeline de capture en cours (pour l'arrêt propre)
 _exiting = threading.Event()
+
+# ── Chien de garde de la capture ───────────────────────────────────────────
+# Changement de jeu : le pipeline PipeWire peut rester « PLAYING » sans plus
+# recevoir une seule image, sans erreur ni EOS (mesuré le 30/09 : 54 s sans
+# image, rien dans le journal). Le métronome répétait alors la dernière image
+# → image figée sur le live. On surveille donc l'arrivée des images et on
+# reconstruit la capture quand elle s'arrête.
+# Journal du 01/10 : sur le MÊME node, la capture se fige toutes les 1-2 min et
+# repart à 30 i/s dès qu'on la reconnecte → la relance rapide est la bonne
+# réponse, et 12 s de silence avant de réagir, c'était trop. Réglable à la main
+# (ex. BONECAST_STALL_S=8) si un écran immobile provoque trop de relances.
+STALL_NODE_S = 2.0      # silence + le node gamescope a changé → on relance de suite
+STALL_SAME_S = float(os.environ.get("BONECAST_STALL_S", "5"))  # même node → relance (puis délai doublé)
+STALL_MAX_S = 120.0     # plafond du délai : écran immobile = gamescope n'envoie rien
+HEALTHY_FRAMES = 60     # images reçues d'affilée pour juger la capture saine
+CAP = {"live": False, "gen": 0, "loop": None, "node": None, "backend": None,
+       "start": 0.0, "last": 0.0, "count": 0}
+_cap_lock = threading.Lock()
+RESTART = threading.Event()   # posé par le chien de garde, lu par la boucle principale
+RESTART_HINT = {"node": None}  # node déjà trouvé par le chien de garde (évite un 2e pw-dump)
+NODE_STATE = {}                # id de node → état PipeWire vu au dernier pw-dump (diagnostic)
 
 
 def graceful_exit(reason):
@@ -339,6 +394,89 @@ def start_brb_listener():
     threading.Thread(target=run, daemon=True).start()
 
 
+def teardown(pipe):
+    """Arrête un pipeline SANS arracher le flux à gamescope (voir graceful_exit :
+    pause, laisser finir l'image en cours, puis NULL). Dans un thread borné : un
+    pipewiresrc bloqué ne doit pas figer la boucle principale."""
+    def _t():
+        try:
+            pipe.set_state(Gst.State.PAUSED)
+            pipe.get_state(1 * Gst.SECOND)
+            time.sleep(0.3)
+        except Exception as e:
+            log.warning(f"arrêt du pipeline (pause): {e!r}")
+        pipe.set_state(Gst.State.NULL)
+        pipe.get_state(2 * Gst.SECOND)
+    t = threading.Thread(target=_t, daemon=True)
+    t.start()
+    t.join(6)
+    if t.is_alive():
+        log.warning("arrêt du pipeline bloqué (>6 s) — on continue sans l'attendre")
+
+
+def request_restart(gen, reason, node_hint=None):
+    """Demande la reconstruction de la capture ; sans effet si elle a déjà changé."""
+    with _cap_lock:
+        if gen != CAP["gen"] or not CAP["live"] or RESTART.is_set():
+            return False
+        RESTART_HINT["node"] = node_hint
+        RESTART.set()
+        loop = CAP["loop"]
+    log.warning(f"capture figée → relance : {reason}")
+    if loop is not None:
+        loop.quit()      # thread-safe : fait sortir run_backend
+    return True
+
+
+def start_watchdog():
+    """Surveille l'arrivée des images (même si l'écran pause est affiché : au
+    retour au jeu, la capture doit déjà être revenue).
+
+    Écran immobile = gamescope n'envoie rien, c'est normal : on ne relance donc
+    sur le MÊME node qu'après STALL_SAME_S, avec un délai qui double à chaque
+    relance sans images soutenues (donc pas de reconnexions en rafale sur un
+    menu fixe). Si le node a changé ou réapparu, on relance tout de suite."""
+    def run():
+        backoff = STALL_SAME_S
+        next_probe = 0.0
+        next_upgrade = 0.0
+        while not _exiting.is_set():
+            time.sleep(1.0)
+            with _cap_lock:
+                live, gen = CAP["live"], CAP["gen"]
+                node, backend = CAP["node"], CAP["backend"]
+                last, start, count = CAP["last"], CAP["start"], CAP["count"]
+            if not live:
+                continue
+            now = time.monotonic()
+            idle = now - last
+            if count >= HEALTHY_FRAMES:
+                backoff = STALL_SAME_S          # elle coule vraiment : on repart à zéro
+            # Repli (pipewiresrc nu / ximagesrc) alors que le node gamescope est
+            # (re)venu : on repasse dessus. Test rare, pour ménager pw-dump.
+            if node is None and now - start > 10 and now >= next_upgrade:
+                next_upgrade = now + 15
+                found = find_screen_node()
+                if found:
+                    request_restart(gen, "le node gamescope est de retour", found)
+                    continue
+            if idle < STALL_NODE_S or now < next_probe:
+                continue
+            next_probe = now + 2
+            cur = find_screen_node()
+            if cur and cur != node:
+                request_restart(gen, f"node gamescope {node} → {cur} "
+                                     f"(plus d'image depuis {idle:.0f}s)", cur)
+            elif idle >= backoff:
+                # état du node (running / idle / suspended) : dit si gamescope a
+                # cessé de produire ou si c'est notre côté qui est bloqué.
+                if request_restart(gen, f"aucune image depuis {idle:.0f}s "
+                                        f"(backend={backend}, node={node}, "
+                                        f"état={NODE_STATE.get(str(node), '?')})", cur):
+                    backoff = min(backoff * 2, STALL_MAX_S)
+    threading.Thread(target=run, daemon=True).start()
+
+
 def _pw_dump(timeout=5):
     """Sortie de `pw-dump`, ou None. JAMAIS `getoutput()` nu ici.
 
@@ -395,6 +533,7 @@ def find_screen_node():
             continue
         if "video/source" in mc.lower() or "gamescope" in blob or "screen" in blob or "video/output" in mc.lower():
             vids.append((n.get("id"), name, mc))
+            NODE_STATE[str(n.get("id"))] = (n.get("info", {}) or {}).get("state")
     if vids:
         log.info(f"nodes vidéo candidats: {vids}")
     for nid, name, mc in vids:
@@ -403,6 +542,53 @@ def find_screen_node():
     for nid, name, mc in vids:
         if "video/source" in mc.lower():
             return str(nid)
+    return None
+
+
+def _dims(size):
+    """{"width":W,"height":H} ou {"default":{...},"min":..,"max":..} → (W, H) | None."""
+    if isinstance(size, dict) and isinstance(size.get("default"), dict):
+        size = size["default"]
+    try:
+        w, h = int(size["width"]), int(size["height"])
+    except (TypeError, KeyError, ValueError):
+        return None
+    return (w & ~1, h & ~1) if w > 1 and h > 1 else None
+
+
+def probe_source_size():
+    """Taille native de l'écran jeu (gamescope) : (W, H) ou None.
+    1) les formats annoncés par le node PipeWire gamescope (Format négocié, sinon
+    EnumFormat) ; 2) à défaut, la taille du display X imbriqué. Sans toucher au
+    flux : se connecter à gamescope pour « voir » la taille le planterait."""
+    for _ in range(4):
+        nid = find_screen_node()
+        if nid:
+            try:
+                data = json.loads(_pw_dump() or "[]")
+            except Exception:
+                data = []
+            for n in data:
+                if str(n.get("id")) != str(nid):
+                    continue
+                params = (n.get("info", {}) or {}).get("params", {}) or {}
+                for key in ("Format", "EnumFormat"):
+                    for prm in params.get(key) or []:
+                        d = _dims(prm.get("size")) if isinstance(prm, dict) else None
+                        if d:
+                            return d
+            break
+        time.sleep(1)
+    try:
+        import re
+        disp = find_x_display()
+        out = run(["xdpyinfo", "-display", disp], capture_output=True, text=True,
+                  timeout=4).stdout
+        m = re.search(r"dimensions:\s+(\d+)x(\d+)", out)
+        if m:
+            return int(m.group(1)) & ~1, int(m.group(2)) & ~1
+    except Exception as e:
+        log.warning(f"taille X illisible: {e!r}")
     return None
 
 
@@ -444,12 +630,17 @@ def build_pipeline(backend, node=None, display=None):
 
 
 def run_backend(backend, node, display):
-    """Lance un pipeline pour un backend donné. Renvoie True si arrêt normal
-    (EOS/stop), False si erreur GStreamer (→ l'appelant bascule de backend)."""
+    """Lance un pipeline pour un backend donné. Renvoie "normal" (EOS/stop),
+    "error" (erreur GStreamer → l'appelant bascule de backend) ou "restart"
+    (le chien de garde a vu la capture se figer → on la reconstruit)."""
     loop = GLib.MainLoop()
     ok = {"value": True}
     pipe = build_pipeline(backend, node=node, display=display)
     CUR["pipe"] = pipe
+    with _cap_lock:
+        CAP.update(live=True, gen=CAP["gen"] + 1, loop=loop, node=node,
+                   backend=backend, start=time.monotonic(),
+                   last=time.monotonic(), count=0)
     bus = pipe.get_bus()
     bus.add_signal_watch()
 
@@ -475,7 +666,9 @@ def run_backend(backend, node, display):
                      f"device annoncé CAPTURE, Discord sera le lecteur unique")
         except OSError as e:
             log.error(f"ouverture {DEVICE} KO: {e!r}")
-            return False
+            with _cap_lock:
+                CAP["live"] = False
+            return "error"
     out_name = "stdout" if STDOUT_MODE else DEVICE
 
     def on_error(_bus, msg):
@@ -530,6 +723,8 @@ def run_backend(backend, node, display):
             loop.quit()
             return Gst.FlowReturn.ERROR
         stats["n"] += 1
+        CAP["last"] = time.monotonic()
+        CAP["count"] += 1
         # 90e frame → snapshot diag one-shot ; ensuite copie rafraîchie toutes
         # les ~60 frames (2s) pour l'aperçu QAM encodé par write_preview.
         if not STDOUT_MODE and (stats["n"] == 90 or stats["n"] % 60 == 0):
@@ -632,10 +827,21 @@ def run_backend(backend, node, display):
         # l'itération suivante → tempête de pipelines + fuite FD).
         for sid in sources:
             try:
-                GLib.source_remove(sid)
+                # Un timeout déjà déclenché s'est retiré tout seul : le retirer
+                # encore faisait un « Source ID n was not found » à chaque relance.
+                if GLib.MainContext.default().find_source_by_id(sid) is not None:
+                    GLib.source_remove(sid)
             except Exception:
                 pass
-        pipe.set_state(Gst.State.NULL)
+        with _cap_lock:
+            CAP["live"] = False
+        # Pause → fin de l'image en cours → NULL (cf. graceful_exit), et jamais
+        # bloquant : un pipewiresrc figé ne doit pas figer la relance.
+        teardown(pipe)
+        try:
+            bus.remove_signal_watch()
+        except Exception:
+            pass
         # Fermer le writer EN DERNIER : le device repasse OUTPUT-only à la
         # fermeture (exclusive_caps) et disparaît des videoinputs de Discord.
         # En mode tuyau, on le GARDE : le pipeline suivant écrit dans le même.
@@ -644,7 +850,27 @@ def run_backend(backend, node, display):
                 os.close(dev_fd)
             except OSError:
                 pass
-    return ok["value"]
+    if RESTART.is_set():
+        return "restart"
+    return "normal" if ok["value"] else "error"
+
+
+def pick_strategies(hint=None):
+    """Stratégies de capture, par ordre de préférence. Recalculées à CHAQUE
+    tentative : le node gamescope change d'id (jeu changé, session relancée) et
+    une liste figée au démarrage ne le retrouvait jamais (journal du 30/09 :
+    « target not found » en boucle jusqu'à l'arrêt du live).
+      1. pipewiresrc path=<node gamescope>   (si node trouvé)
+      2. pipewiresrc nu (PipeWire choisit la source par défaut)
+      3. ximagesrc display=:1                (X nested du jeu — dernier recours)"""
+    node = hint or find_screen_node()
+    display = find_x_display()
+    strategies = []
+    if node:
+        strategies.append(("pipewire", node, None))
+    strategies.append(("pipewire", None, None))
+    strategies.append(("ximagesrc", None, display))
+    return strategies
 
 
 def main():
@@ -652,45 +878,44 @@ def main():
         start_brb_listener()             # avant Gst.init : masque hérité par ses threads
         start_metronome()
     Gst.init(None)
+    start_watchdog()
 
-    # On tente d'abord le node PipeWire gamescope (capture "officielle"), mais
-    # sans s'éterniser : il est capricieux/absent. Attente courte (~30s).
-    node = None
+    # Au démarrage, le node gamescope peut tarder : attente courte (~30 s).
     for _ in range(15):
-        node = find_screen_node()
-        if node:
+        if find_screen_node():
             break
         log.info("aucun node écran PipeWire pour l'instant, attente…")
         time.sleep(2)
-    display = find_x_display()
 
-    # Stratégies de capture, par ordre de préférence, avec bascule auto en cas
-    # d'erreur GStreamer (boucle infinie jusqu'à arrêt explicite) :
-    #   1. pipewiresrc path=<node gamescope>   (si node trouvé)
-    #   2. pipewiresrc            (plain, PipeWire choisit la source par défaut —
-    #      c'est le chemin par défaut de decky-streamer, souvent le plus fiable)
-    #   3. ximagesrc display=:1   (X nested du jeu — dernier recours)
-    strategies = []
-    if node:
-        strategies.append(("pipewire", node, None))
-    strategies.append(("pipewire", None, None))
-    strategies.append(("ximagesrc", None, display))
-
-    i = 0
+    attempt = 0     # rang de la stratégie dans la série d'échecs en cours
     fails = 0
+    hint = None     # node déjà connu après une relance : pas de pw-dump de plus
     while True:
-        backend, n, disp = strategies[i % len(strategies)]
-        normal = run_backend(backend, n, disp)
-        if normal:
+        strategies = pick_strategies(hint)
+        hint = None
+        backend, n, disp = strategies[attempt % len(strategies)]
+        result = run_backend(backend, n, disp)
+        if result == "normal":
+            # En stream (tuyau vers ffmpeg), SEUL graceful_exit arrête le feeder :
+            # une fin de flux (node disparu au changement de jeu) n'est pas un
+            # arrêt demandé → on se rebranche, sinon le live meurt.
+            if STDOUT_MODE:
+                attempt = 0
+                time.sleep(0.5)
+                continue
             break  # arrêt demandé (process tué par stop_screen_camera)
+        if result == "restart":
+            # Capture figée : on repart du début (node re-cherché), sans le
+            # délai des échecs — le chien de garde a déjà attendu.
+            RESTART.clear()
+            hint = RESTART_HINT["node"]
+            RESTART_HINT["node"] = None
+            attempt = 0
+            fails = 0
+            time.sleep(0.1)
+            continue
         # erreur → stratégie suivante, petite pause anti-boucle-folle.
-        # Si le node a disparu (jeu quitté), on re-cherche pour le prochain tour.
-        if n and not find_screen_node():
-            try:
-                strategies = [s for s in strategies if not (s[0] == "pipewire" and s[1])]
-            except Exception:
-                pass
-        i += 1
+        attempt += 1
         fails += 1
         # Backoff progressif : quand AUCUNE source ne marche (typiquement hors
         # gamescope, en Bureau), spinner à 2s épuisait les FD. On plafonne à 30s.
@@ -698,4 +923,10 @@ def main():
 
 
 if __name__ == "__main__":
+    if PROBE_MODE:
+        sz = probe_source_size()
+        if not sz:
+            sys.exit(1)
+        print(f"{sz[0]}x{sz[1]}")
+        sys.exit(0)
     main()

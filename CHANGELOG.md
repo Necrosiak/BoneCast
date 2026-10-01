@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.5.2 — 2026-10-01
+
+### No more frozen picture when switching games
+
+Reported, measured and largely fixed by [dreemur-e](https://github.com/dreemur-e) in
+[#1](https://github.com/Necrosiak/BoneCast/issues/1), on a Steam Deck OLED.
+
+When you switched or closed a game during a stream or a recording, the video
+could freeze on the last picture while the sound kept going. Two things caused
+it, and the capture now handles both:
+
+- **gamescope creates a new capture stream when the game changes**, with a new
+  id. BoneCast stayed on the old one and never looked for the new one. It now
+  looks for the current stream every time it reconnects, and switches to it
+  about 2 seconds after the picture stops.
+- **The same stream can stop sending pictures without any error.** dreemur-e
+  measured it every one or two minutes on the Deck, and a reconnection brings
+  it back. BoneCast now reconnects after 5 seconds without a picture. Since a
+  still screen (a paused menu) also sends nothing, the wait doubles after each
+  try, up to 2 minutes, and goes back to 5 seconds once pictures flow again.
+- Every reconnection goes through the clean disconnect added in 0.5.1, so it
+  can't make gamescope crash.
+- When the stream ends during a game switch, the capture reconnects instead of
+  stopping, so the live no longer dies.
+
+The watchdog comes from dreemur-e's own patched build, reviewed and merged.
+Thank you!
+
+### Resolution and frame rate are now real
+
+The capture always ran at 1280×720 and 30 fps, whatever the stream settings
+said: 1080p was an upscaled 720p, and 60 fps repeated every frame twice. The
+capture now runs at the chosen resolution (720p, 800p or a real 1080p) and frame
+rate. **Source** uses your screen's native size, read without touching the
+capture, capped at 1080p. Higher settings use more CPU with software encoding.
+
 ## 0.5.1 — 2026-09-30
 
 Requested and tested by [dreemur-e](https://github.com/dreemur-e) in

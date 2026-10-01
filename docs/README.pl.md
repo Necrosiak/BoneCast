@@ -88,7 +88,7 @@ równie cenne.
 
 ## Autorzy
 
-Stworzone i utrzymywane przez **Necrosiak**. Część pakietu wtyczek Necrosiak dla Trybu Gry Steam.
+Stworzone i utrzymywane przez **Necrosiak**. Część pakietu wtyczek Necrosiak dla Trybu Gry Steam. Podziękowania dla [dreemur-e](https://github.com/dreemur-e) za testy na Steam Deck OLED, pomysły do YouTube i strażnika przechwytywania, który usunął zamrożony obraz ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
 ## Informacja o AI
 

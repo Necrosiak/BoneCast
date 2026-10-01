@@ -88,7 +88,7 @@ inhabituelles sont tout aussi précieux.
 
 ## Crédits
 
-Créé et maintenu par **Necrosiak**. Fait partie de la suite de plugins Necrosiak pour le Mode Jeu Steam.
+Créé et maintenu par **Necrosiak**. Fait partie de la suite de plugins Necrosiak pour le Mode Jeu Steam. Merci à [dreemur-e](https://github.com/dreemur-e) pour ses tests sur Steam Deck OLED, ses idées pour YouTube et le chien de garde de la capture qui a réglé l'image figée ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
 ## Mention IA
 

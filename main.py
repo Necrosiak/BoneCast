@@ -1442,7 +1442,31 @@ class Plugin:
         cls._ba_real_sink = None
 
     @classmethod
-    async def _start_camera_feeder(cls, out_fd):
+    async def _capture_size(cls, w, h):
+        """Taille à laquelle le feeder capture : 720p/800p/1080p telles quelles ;
+        « source » (0, 0) = taille native de l'écran jeu, lue par le feeder dans
+        les formats annoncés par PipeWire SANS s'y connecter (idée et code de
+        dreemur-e, BoneCast #1), plafonnée à 1080p : en 4K, le tuyau devrait
+        faire passer ~500 Mo/s."""
+        if w:
+            return w, h
+        from asyncio import create_subprocess_exec, wait_for
+        from subprocess import PIPE, DEVNULL
+        try:
+            p = await create_subprocess_exec(
+                sys_python(), str(cls._feeder_script()), "--probe-size",
+                env=cls._gst_environment(), stdin=DEVNULL, stdout=PIPE, stderr=DEVNULL)
+            out, _ = await wait_for(p.communicate(), timeout=15)
+            cw, ch = (int(v) for v in out.decode().strip().split("x"))
+            if cw > 0 and ch > 0:
+                k = min(1.0, 1920 / cw, 1080 / ch)
+                return int(cw * k) & ~1, int(ch * k) & ~1
+        except Exception as e:
+            logger.warning(f"[stream] taille native illisible ({e!r}) → 1280x720")
+        return 1280, 720
+
+    @classmethod
+    async def _start_camera_feeder(cls, out_fd, size=(1280, 720), fps=30):
         """Lance gst_camera.py --stdout : il capture l'écran gamescope et écrit
         les images brutes (YUY2 1280x720@30) dans `out_fd`, un tuyau dont ffmpeg
         lit l'autre bout. Plus de /dev/video42 : v4l2loopback n'est pas chargé
@@ -1452,6 +1476,7 @@ class Plugin:
         await cls._stop_camera_feeder()
         cls._camera_feeder = await create_subprocess_exec(
             sys_python(), str(cls._feeder_script()), "--stdout",
+            "--size", f"{size[0]}x{size[1]}", "--fps", str(int(fps)),
             env=cls._gst_environment(), stdin=DEVNULL, stdout=out_fd, stderr=PIPE)
         create_task(stream_watcher(cls._camera_feeder.stderr, True, prefix="[gstcam]"))
         return True
@@ -1609,6 +1634,10 @@ class Plugin:
         mon = await cls._default_monitor()   # après le pont = son du jeu seul
         w, h = cls._RES_PRESETS.get(st["resolution"], (1280, 720))
         fps = int(st["fps"]); vb = int(st["bitrate"]); ab = int(st["audio_bitrate"])
+        # Taille et cadence de la CAPTURE = celles du stream (avant : 1280x720@30
+        # fixe, BoneCast #1). Voir _capture_size pour « source ».
+        cap_w, cap_h = await cls._capture_size(w, h)
+        cap_fps = fps if fps in (30, 60) else 30
         gop = max(1, int(st.get("keyframe", 2)) * fps)   # keyframe toutes les N s (Twitch = 2 s)
         # Résout l'encodeur : auto = meilleur matériel dispo, sinon respecte le choix
         # mais retombe en logiciel si le matériel demandé n'est pas là.
@@ -1640,8 +1669,8 @@ class Plugin:
         # temps (vidéo en avance sur le son) ; le filtre fps= comble ensuite.
         args = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-fflags", "+genpts",
                 "-thread_queue_size", "512", "-use_wallclock_as_timestamps", "1",
-                "-f", "rawvideo", "-pix_fmt", "yuyv422", "-video_size", "1280x720",
-                "-framerate", "30", "-i", "pipe:0",
+                "-f", "rawvideo", "-pix_fmt", "yuyv422", "-video_size", f"{cap_w}x{cap_h}",
+                "-framerate", str(cap_fps), "-i", "pipe:0",
                 "-thread_queue_size", "512", "-f", "pulse", "-i", mon]
         audio_idx = [1]                       # entrées audio à mixer (1 = jeu)
         nxt = 2
@@ -1715,7 +1744,7 @@ class Plugin:
             # sinon ffmpeg ne verrait jamais la fin du flux.
             cls._stream_proc = await create_subprocess_exec(
                 *args, stdin=rfd, stdout=PIPE, stderr=PIPE, env=bcenv.user_env())
-            await cls._start_camera_feeder(wfd)
+            await cls._start_camera_feeder(wfd, (cap_w, cap_h), cap_fps)
             os.close(rfd); os.close(wfd)
             rfd = wfd = None
             create_task(stream_watcher(cls._stream_proc.stdout, prefix="[stream]"))

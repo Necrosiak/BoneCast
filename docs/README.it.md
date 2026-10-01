@@ -87,7 +87,7 @@ sono altrettanto preziosi.
 
 ## Crediti
 
-Creato e mantenuto da **Necrosiak**. Fa parte della suite di plugin Necrosiak per la Modalità Gioco di Steam.
+Creato e mantenuto da **Necrosiak**. Fa parte della suite di plugin Necrosiak per la Modalità Gioco di Steam. Grazie a [dreemur-e](https://github.com/dreemur-e) per i test su Steam Deck OLED, le idee per YouTube e il watchdog della cattura che ha risolto l’immagine bloccata ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
 ## Nota sull'IA
 

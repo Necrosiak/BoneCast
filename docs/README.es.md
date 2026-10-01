@@ -87,7 +87,7 @@ poco comunes son igual de valiosos.
 
 ## Créditos
 
-Creado y mantenido por **Necrosiak**. Forma parte de la suite de plugins de Necrosiak para el Modo Juego de Steam.
+Creado y mantenido por **Necrosiak**. Forma parte de la suite de plugins de Necrosiak para el Modo Juego de Steam. Gracias a [dreemur-e](https://github.com/dreemur-e) por sus pruebas en Steam Deck OLED, sus ideas para YouTube y el vigilante de captura que acabó con la imagen congelada ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
 ## Aviso sobre IA
 

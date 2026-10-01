@@ -91,7 +91,7 @@ Feature requests and "it works!" reports on unusual setups are just as valuable.
 
 ## Credits
 
-Created and maintained by **Necrosiak**. Part of the Necrosiak plugin suite for Steam Gaming Mode.
+Created and maintained by **Necrosiak**. Part of the Necrosiak plugin suite for Steam Gaming Mode. Thanks to [dreemur-e](https://github.com/dreemur-e) for testing on the Steam Deck OLED, the YouTube ideas and the capture watchdog that ended the frozen picture ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
 ## AI disclaimer
 

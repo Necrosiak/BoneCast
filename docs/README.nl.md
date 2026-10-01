@@ -87,7 +87,7 @@ zijn net zo waardevol.
 
 ## Credits
 
-Gemaakt en onderhouden door **Necrosiak**. Onderdeel van de Necrosiak-pluginsuite voor de Steam-spelmodus.
+Gemaakt en onderhouden door **Necrosiak**. Onderdeel van de Necrosiak-pluginsuite voor de Steam-spelmodus. Dank aan [dreemur-e](https://github.com/dreemur-e) voor het testen op de Steam Deck OLED, de YouTube-ideeën en de capture-watchdog die het bevroren beeld oploste ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
 ## AI-vermelding
 
