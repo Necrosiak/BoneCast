@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.4 — 2026-10-08
+
+- Automatic-update notices can now be opened from Steam's notification center.
+  They show the details in a controller-friendly dialog; a failed update also
+  offers a link to its GitHub release.
+- These status notices no longer sound like incoming Steam chat.
+- The click route follows [Steamcord PR #71](https://github.com/Necrosiak/Steamcord/pull/71)
+  without using Decky's crash-prone native toaster or intercepting real chats.
+
 ## 0.5.3 — 2026-10-01
 
 ### Resume a stream after a drop

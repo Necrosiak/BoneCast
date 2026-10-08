@@ -1,5 +1,7 @@
 # BoneCast 🦴📡
 
+- **Clickable update notices** — open an update notice from Steam's notification center to see details in a controller-friendly dialog; failed updates link to the matching release.
+
 **Twitch and YouTube in Steam Gaming Mode** — a [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for Steam Deck / Bazzite / SteamOS.
 
 🌍 **Languages:** **English** · [Français](docs/README.fr.md) · [Deutsch](docs/README.de.md) · [Español](docs/README.es.md) · [Italiano](docs/README.it.md) · [Português](docs/README.pt.md) · [Nederlands](docs/README.nl.md) · [Polski](docs/README.pl.md) · [Русский](docs/README.ru.md)

@@ -10,6 +10,9 @@ import {
   DialogButton,
   Focusable,
   Router,
+  Navigation,
+  ConfirmModal,
+  showModal,
 } from "@decky/ui";
 import { definePlugin, call } from "@decky/api";
 import { FaTwitch, FaYoutube } from "react-icons/fa";
@@ -19,6 +22,7 @@ import {
 } from "./components/Icons";
 import { focusHalo, ActionCard, TWITCH, YOUTUBE, DANGER } from "./components/Styled";
 import { t } from "./i18n";
+import { clearClickableNotifications, notifyClickable } from "./clickableNotify";
 
 const B = DialogButton as any;
 const EyeIcon = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none"
@@ -1343,9 +1347,11 @@ function streamerActive(): boolean {
 }
 const STREAMER_RETRY_MS = 15000;
 
-function notify(data: { title?: string; body: string; duration?: number }) {
+function notify(data: { title?: string; body: string; duration?: number; clickKey?: string; onClick?: () => void }) {
   if (streamerActive()) { setTimeout(() => notify(data), STREAMER_RETRY_MS); return; }
   try {
+    if (data.clickKey && data.onClick && notifyClickable("bonecast", data.clickKey,
+      data.title || "BoneCast", data.body, data.onClick)) return;
     const App = (window as any).App;
     const steamid = App?.GetCurrentUser?.()?.strSteamID || App?.m_CurrentUser?.strSteamID || "";
     // steamid OBLIGATOIRE : sans lui l'entrée est malformée et fait planter le
@@ -1382,16 +1388,31 @@ async function reportFailedUpdate() {
       // Backend pas encore joignable : ce n'est pas un échec, on repasse.
     }
     if (notice?.version) {
+      const body = notice.reload
+        ? `Update ${notice.version} installed — it becomes active the next time Steam starts.`
+        : `Update ${notice.version} could not be installed automatically. `
+          + "Install it from Decky → Developer → Install plugin from URL.";
       notify({
         title: "BoneCast",
         // Deux avis distincts : la maj n'a pas pu s'écrire (il faut la poser à
         // la main), ou elle est écrite mais pas chargée — le backend n'a pas le
         // droit de redémarrer le loader, donc elle prendra effet au prochain
         // démarrage de Steam. Annoncer le second comme un échec serait faux.
-        body: notice.reload
-          ? `Update ${notice.version} installed — it becomes active the next time Steam starts.`
-          : `Update ${notice.version} could not be installed automatically. `
-            + "Install it from Decky → Developer → Install plugin from URL.",
+        body,
+        clickKey: `update:${notice.version}:${notice.reload ? "installed" : "failed"}`,
+        onClick: () => {
+          Navigation.CloseSideMenus();
+          showModal(<ConfirmModal
+            strTitle="BoneCast update"
+            strDescription={body}
+            bAlertDialog={!!notice.reload}
+            strOKButtonText={notice.reload ? "OK" : "Open release"}
+            onOK={notice.reload ? undefined : () => {
+              const url = `https://github.com/Necrosiak/BoneCast/releases/tag/v${encodeURIComponent(notice.version)}`;
+              (window as any).SteamClient?.URL?.ExecuteSteamURL?.("steam://openurl/" + url);
+            }}
+          />);
+        },
       });
       return;
     }
@@ -1412,6 +1433,10 @@ export default definePlugin(() => {
     title: <div className={staticClasses.Title}>BoneCast</div>,
     icon: <BoneCastIcon />,
     content: <Content />,
-    onDismount() { clearInterval(liveTimer); setLiveSource("bonecast", false); },
+    onDismount() {
+      clearInterval(liveTimer);
+      setLiveSource("bonecast", false);
+      clearClickableNotifications("bonecast");
+    },
   };
 });

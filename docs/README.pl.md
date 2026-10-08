@@ -1,5 +1,7 @@
 # BoneCast 🦴📡
 
+**Nowość w v0.5.4:** powiadomienia o aktualizacji można otworzyć w Steam. Okno dostosowane do kontrolera pokazuje szczegóły, a przy błędzie link do wydania.
+
 **Twitch i YouTube w Trybie Gry Steam** — wtyczka [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) dla Steam Deck / Bazzite / SteamOS.
 
 🌍 **Języki:** [English](../README.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Italiano](README.it.md) · [Português](README.pt.md) · [Nederlands](README.nl.md) · **Polski** · [Русский](README.ru.md)
