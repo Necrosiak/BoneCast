@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.5 — 2026-10-09
+
+- Notify through Steam when a Twitch or YouTube broadcast stops unexpectedly
+  and BoneCast cannot restore it within the configured reconnection window.
+  The alert works with the QAM closed, is shown once, and is never sent for
+  an intentional stop or a successful reconnection. Requested in [#1](https://github.com/Necrosiak/BoneCast/issues/1).
+- When streaming and recording together, an RTMP output failure now ends the
+  encoder instead of silently continuing the recording with a false LIVE state.
+  This lets the reconnection watchdog detect the failure.
+
 ## 0.5.4 — 2026-10-08
 
 - Automatic-update notices can now be opened from Steam's notification center.

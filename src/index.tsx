@@ -1347,22 +1347,30 @@ function streamerActive(): boolean {
 }
 const STREAMER_RETRY_MS = 15000;
 
-function notify(data: { title?: string; body: string; duration?: number; clickKey?: string; onClick?: () => void }) {
-  if (streamerActive()) { setTimeout(() => notify(data), STREAMER_RETRY_MS); return; }
+function notify(data: { title?: string; body: string; duration?: number; clickKey?: string; onClick?: () => void; urgent?: boolean }): boolean {
+  // Une alerte de live perdu doit sortir même si le mode streamer est forcé :
+  // sinon l'utilisateur ne sait jamais qu'il n'est plus à l'antenne.
+  if (!data.urgent && streamerActive()) {
+    setTimeout(() => notify(data), STREAMER_RETRY_MS);
+    return true;
+  }
   try {
     if (data.clickKey && data.onClick && notifyClickable("bonecast", data.clickKey,
-      data.title || "BoneCast", data.body, data.onClick)) return;
+      data.title || "BoneCast", data.body, data.onClick)) return true;
     const App = (window as any).App;
     const steamid = App?.GetCurrentUser?.()?.strSteamID || App?.m_CurrentUser?.strSteamID || "";
     // steamid OBLIGATOIRE : sans lui l'entrée est malformée et fait planter le
     // panneau de notifs Steam → mieux vaut ne rien notifier.
-    if (!steamid) return;
-    (window as any).SteamClient?.ClientNotifications?.DisplayClientNotification?.(
+    const notifications = (window as any).SteamClient?.ClientNotifications;
+    const display = notifications?.DisplayClientNotification;
+    if (!steamid || typeof display !== "function") return false;
+    display.call(notifications,
       1,
       JSON.stringify({ title: data.title || "BoneCast", body: data.body, state: "active", steamid }),
       () => {},
     );
-  } catch (e) { console.error("[BoneCast] notify failed", e); }
+    return true;
+  } catch (e) { console.error("[BoneCast] notify failed", e); return false; }
 }
 
 // ── Auto-update : le frontend ne fait que PRÉVENIR ───────────────────────────
@@ -1424,8 +1432,29 @@ export default definePlugin(() => {
   reportFailedUpdate();
   // Mode streamer : un stream OU un enregistrement BoneCast est une source de
   // live — le toast finirait aussi dans le fichier enregistré.
-  const pollLive = () => call<[], any>("get_stream_status")
-    .then((st: any) => setLiveSource("bonecast", !!st?.streaming)).catch(() => {});
+  let alertInFlight = false;
+  let lastShownAlertId = 0;
+  const pollLive = async () => {
+    try {
+      const st: any = await call("get_stream_status");
+      setLiveSource("bonecast", !!st?.streaming);
+    } catch {}
+    if (alertInFlight) return;
+    alertInFlight = true;
+    try {
+      const alert: any = await call("get_stream_alert");
+      if (!alert?.id) return;
+      if (lastShownAlertId === alert.id || notify({
+        title: "BoneCast",
+        body: t("stream_stopped_alert", { p: platformName(alert.platform) }),
+        urgent: true,
+      })) {
+        lastShownAlertId = alert.id;
+        await call("ack_stream_alert", alert.id);
+      }
+    } catch (e) { console.error("[BoneCast] stream alert failed", e); }
+    finally { alertInFlight = false; }
+  };
   pollLive();
   const liveTimer = setInterval(pollLive, 5000);
   return {

@@ -13,6 +13,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Test stream-stop handling
+        run: python3 -m unittest discover -s tests -v
+
       - name: Setup latest Node.js
         uses: actions/setup-node@v4
         with:

@@ -129,6 +129,8 @@ class Plugin:
     _resume = None                             # {"platform", "until"} : reconnexion auto en cours
     _yt_end_task = None                        # fin YouTube différée (arrêt manuel / reboot)
     _stream_started = 0.0
+    _pending_stream_alert = None
+    _stream_alert_seq = 0
     _TWITCH_INGEST = "rtmp://ingest.global-contribute.live-video.net/app"
     _OVERLAY_DEFAULTS = {"opacity": 62, "fontSize": 13, "width": 360,
                          "height": 460, "pos": "tr", "badges": True, "thirdParty": True}
@@ -1810,8 +1812,11 @@ class Plugin:
         if record_only:
             args += ["-f", "matroska", cls._record_path]
         elif rec:
+            # Une coupure RTMP doit arrêter ffmpeg : le watchdog peut alors
+            # reprendre le live ou prévenir l'utilisateur. onfail=ignore
+            # laissait l'enregistrement tourner avec un faux statut « LIVE ».
             args += ["-flags", "+global_header", "-f", "tee",
-                     f"[f=flv:onfail=ignore]{ingest}/{key}"
+                     f"[f=flv:onfail=abort]{ingest}/{key}"
                      f"|[f=matroska]{cls._record_path}"]
         else:
             args += ["-f", "flv", f"{ingest}/{key}"]
@@ -1886,6 +1891,7 @@ class Plugin:
             # relancer en boucle ne ferait que répéter l'erreur.
         if until is None:
             await cls.stop_stream()
+            cls._queue_stream_alert(plat, proc.returncode)
             return
         await cls._teardown_stream()
         cls._resume = {"platform": plat, "until": until}
@@ -1894,6 +1900,27 @@ class Plugin:
         create_task(cls._auto_resume(cls._resume))
 
     _resume_until_prev = 0.0
+
+    @classmethod
+    def _queue_stream_alert(cls, platform, exit_code=None):
+        if platform in ("twitch", "youtube"):
+            cls._stream_alert_seq += 1
+            cls._pending_stream_alert = {"platform": platform,
+                                         "exit_code": exit_code,
+                                         "at": int(time()),
+                                         "id": cls._stream_alert_seq}
+            logger.warning(f"[stream] alerte : live {platform} terminé sans demande")
+
+    @classmethod
+    async def get_stream_alert(cls):
+        """L'alerte reste disponible jusqu'à confirmation par le frontend."""
+        return cls._pending_stream_alert or {}
+
+    @classmethod
+    async def ack_stream_alert(cls, alert_id):
+        if cls._pending_stream_alert and cls._pending_stream_alert["id"] == alert_id:
+            cls._pending_stream_alert = None
+        return {"ok": True}
 
     @classmethod
     def _resume_window(cls):
@@ -1961,6 +1988,7 @@ class Plugin:
             logger.warning("[stream] fenêtre de reprise écoulée → live terminé")
             if plat == "youtube":
                 await cls._yt_end_broadcast()
+            cls._queue_stream_alert(plat)
 
     @classmethod
     async def _discover_mic_so(cls, mic_src, pid):
