@@ -59,6 +59,7 @@ Everything is driven from the QAM and survives reboots.
 2. Enable **Developer Mode** in Decky's general settings, then Decky settings → **Developer** → *Install plugin from URL*:
    `https://github.com/Necrosiak/BoneCast/releases/latest/download/BoneCast.zip`
    (or grab `BoneCast.zip` from the [Releases](https://github.com/Necrosiak/BoneCast/releases) page and install from ZIP).
+   > ⚠️ Decky Loader 3.3 and newer shows a *Third-Party Plugin Installation* warning here, because the plugin is not from the Decky Store. That is expected: wait 5 seconds and confirm. It only appears once, and updates install by themselves afterwards.
 3. Open the **Quick Access Menu → BoneCast**, log in to Twitch, and go live.
 
 BoneCast **auto-updates** itself from GitHub Releases (toggleable in the plugin's *Updates* section).

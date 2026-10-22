@@ -58,6 +58,7 @@ Tutto si controlla dal QAM e sopravvive ai riavvii.
 2. Attiva la **Modalità sviluppatore** nelle impostazioni generali di Decky, poi impostazioni Decky → **Sviluppatore** → *Installa plugin da URL*:
    `https://github.com/Necrosiak/BoneCast/releases/latest/download/BoneCast.zip`
    (oppure scarica `BoneCast.zip` dalla pagina delle [Releases](https://github.com/Necrosiak/BoneCast/releases) e installalo dallo ZIP).
+   > ⚠️ Da Decky Loader 3.3 qui compare un avviso di *installazione di plugin di terze parti*, perché il plugin non proviene dal Decky Store. È normale: attendi 5 secondi e conferma. Compare una sola volta, poi gli aggiornamenti si installano da soli.
 3. Apri il **Menu di accesso rapido → BoneCast**, accedi a Twitch e vai in diretta.
 
 BoneCast **si aggiorna automaticamente** dalle Releases di GitHub (disattivabile nella sezione *Aggiornamenti* del plugin).

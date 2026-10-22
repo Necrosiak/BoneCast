@@ -58,6 +58,7 @@ BoneCast помещает всё необходимое для стриминг�
 2. Включите **режим разработчика** в общих настройках Decky, затем настройки Decky → **Разработчик** → *Установить плагин по URL*:
    `https://github.com/Necrosiak/BoneCast/releases/latest/download/BoneCast.zip`
    (или возьмите `BoneCast.zip` со страницы [Releases](https://github.com/Necrosiak/BoneCast/releases) и установите из ZIP).
+   > ⚠️ Начиная с Decky Loader 3.3 здесь появляется предупреждение *Third-Party Plugin Installation*, потому что плагин не из Decky Store. Это нормально: подождите 5 секунд и подтвердите. Оно появляется только один раз, дальше обновления ставятся сами.
 3. Откройте **меню быстрого доступа → BoneCast**, войдите в Twitch и выходите в эфир.
 
 BoneCast **обновляется автоматически** через GitHub Releases (отключается в разделе *Обновления* плагина).
