@@ -1,5 +1,9 @@
 # BoneCast 🦴📡
 
+<!-- expanded-navigation -->
+**Uitgebreide weergave** — Open BoneCast via het Steam-hoofdmenu of kies **Uitgebreide weergave openen** in het sneltoegangspaneel. De zijbalk biedt dezelfde functies als het paneel.
+
+
 **Nieuw in v0.5.4:** updatemeldingen zijn te openen vanuit Steam. Een dialoogvenster voor controllers toont details en bij fouten een link naar de release.
 
 **Twitch en YouTube in de Steam-spelmodus** — een [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)-plug-in voor Steam Deck / Bazzite / SteamOS.

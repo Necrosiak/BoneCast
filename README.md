@@ -1,5 +1,9 @@
 # BoneCast 🦴📡
 
+<!-- expanded-navigation -->
+**Expanded view** — Open BoneCast from the Steam main menu or choose **Open expanded view** in its Quick Access panel. The sidebar gives you access to the same features as the panel.
+
+
 - **Clickable update notices** — open an update notice from Steam's notification center to see details in a controller-friendly dialog; failed updates link to the matching release.
 
 **Twitch and YouTube in Steam Gaming Mode** — a [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for Steam Deck / Bazzite / SteamOS.

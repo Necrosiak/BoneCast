@@ -35,6 +35,7 @@ let _locale: Locale | null = null;
 
 const T: Record<Locale, Dict> = {
   en: {
+    view_expanded: "Open expanded view", view_close: "Close",
     effort: "Encoder effort",
     effort_light: "Light — less CPU, softer picture",
     effort_balanced: "Balanced (recommended)",
@@ -244,6 +245,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Type your YouTube channel (@handle) below, or log in.",
   },
   fr: {
+    view_expanded: "Ouvrir la vue étendue", view_close: "Fermer",
     effort: "Effort de l'encodeur",
     effort_light: "Léger — moins de CPU, image plus douce",
     effort_balanced: "Équilibré (recommandé)",
@@ -445,6 +447,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Saisis ta chaîne YouTube (@pseudo) ci-dessous, ou connecte-toi.",
   },
   de: {
+    view_expanded: "Große Ansicht öffnen", view_close: "Schließen",
     effort: "Encoder-Aufwand",
     effort_light: "Leicht — weniger CPU, weicheres Bild",
     effort_balanced: "Ausgewogen (empfohlen)",
@@ -646,6 +649,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Gib unten deinen YouTube-Kanal (@Name) ein oder melde dich an.",
   },
   es: {
+    view_expanded: "Abrir vista ampliada", view_close: "Cerrar",
     effort: "Esfuerzo del codificador",
     effort_light: "Ligero — menos CPU, imagen más suave",
     effort_balanced: "Equilibrado (recomendado)",
@@ -847,6 +851,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Escribe tu canal de YouTube (@usuario) abajo, o inicia sesión.",
   },
   it: {
+    view_expanded: "Apri vista estesa", view_close: "Chiudi",
     effort: "Sforzo dell'encoder",
     effort_light: "Leggero — meno CPU, immagine più morbida",
     effort_balanced: "Bilanciato (consigliato)",
@@ -1048,6 +1053,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Scrivi qui sotto il tuo canale YouTube (@nome), oppure accedi.",
   },
   pt: {
+    view_expanded: "Abrir vista ampliada", view_close: "Fechar",
     effort: "Esforço do codificador",
     effort_light: "Leve — menos CPU, imagem mais suave",
     effort_balanced: "Equilibrado (recomendado)",
@@ -1249,6 +1255,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Digite seu canal do YouTube (@nome) abaixo, ou entre.",
   },
   nl: {
+    view_expanded: "Uitgebreide weergave openen", view_close: "Sluiten",
     effort: "Encoder-inspanning",
     effort_light: "Licht — minder CPU, zachter beeld",
     effort_balanced: "Gebalanceerd (aanbevolen)",
@@ -1450,6 +1457,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Typ hieronder je YouTube-kanaal (@naam), of log in.",
   },
   pl: {
+    view_expanded: "Otwórz widok rozszerzony", view_close: "Zamknij",
     effort: "Wysiłek enkodera",
     effort_light: "Lekki — mniej CPU, łagodniejszy obraz",
     effort_balanced: "Zrównoważony (zalecany)",
@@ -1651,6 +1659,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Wpisz poniżej swój kanał YouTube (@nazwa) albo się zaloguj.",
   },
   ru: {
+    view_expanded: "Открыть расширенный вид", view_close: "Закрыть",
     effort: "Нагрузка кодировщика",
     effort_light: "Лёгкая — меньше CPU, мягче картинка",
     effort_balanced: "Сбалансированная (рекомендуется)",

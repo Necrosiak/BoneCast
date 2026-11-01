@@ -13,8 +13,9 @@ import {
   Navigation,
   ConfirmModal,
   showModal,
+  ModalRoot,
 } from "@decky/ui";
-import { definePlugin, call } from "@decky/api";
+import { definePlugin, call, routerHook } from "@decky/api";
 import { FaTwitch, FaYoutube } from "react-icons/fa";
 import {
   BoneCastIcon, IcBroadcast, IcChat, IcController, IcFilm, IcGear, IcGithub, IcKey, IcSliders,
@@ -22,6 +23,9 @@ import {
 } from "./components/Icons";
 import { focusHalo, ActionCard, TWITCH, YOUTUBE, DANGER } from "./components/Styled";
 import { t } from "./i18n";
+import { deferredView } from "./deferredView";
+import { ExpandedFrame, ExpandedSection } from "./ExpandedFrame";
+import { registerSteamMenu } from "./steamMenu";
 import { clearClickableNotifications, notifyClickable } from "./clickableNotify";
 
 const B = DialogButton as any;
@@ -1256,68 +1260,100 @@ function WatchSection() {
 
 const LAST_PLATFORM_KEY = "bonecast_last_platform";
 
+type Platform = "twitch" | "youtube" | "config";
+type Tab = "live" | "watch" | "chat" | "settings";
+type Selection = { platform: Platform; tab: Tab };
+const SELECTION_EVENT = "bonecast-navigation";
+let selection: Selection = { platform: (() => {
+  try { return localStorage.getItem(LAST_PLATFORM_KEY) === "youtube" ? "youtube" : "twitch"; }
+  catch { return "twitch"; }
+})(), tab: "live" };
+function useSelection(): [Selection, (value: Selection) => void] {
+  const [value, update] = useState(selection);
+  useEffect(() => {
+    const sync = () => update(selection);
+    window.addEventListener(SELECTION_EVENT, sync);
+    sync();
+    return () => window.removeEventListener(SELECTION_EVENT, sync);
+  }, []);
+  return [value, (next) => {
+    selection = next;
+    if (next.platform !== "config") try { localStorage.setItem(LAST_PLATFORM_KEY, next.platform); } catch {}
+    window.dispatchEvent(new Event(SELECTION_EVENT));
+  }];
+}
+// One catalogue and the SAME business components for both interfaces.
+function platformSections(platform: Platform): ExpandedSection[] {
+  if (platform === "config") return [{ id: "config:settings", label: t("tab_settings"), icon: <IcGear /> }];
+  const color = platform === "twitch" ? TWITCH : YOUTUBE;
+  return [
+    { id: platform + ":live", label: t("tab_live"), icon: <IcBroadcast />, color },
+    ...(platform === "twitch" ? [{ id: "twitch:watch", label: t("tab_watch"), icon: <EyeIcon />, color }] : []),
+    { id: platform + ":chat", label: t("tab_chat"), icon: <IcChat />, color },
+    { id: platform + ":settings", label: t("tab_settings"), icon: <IcSliders />, color },
+  ];
+}
+function SectionContent({ platform, tab }: Selection) {
+  if (platform === "config") return <ConfigSection />;
+  if (tab === "live") return platform === "twitch" ? <LiveSection /> : <YouTubeSection />;
+  if (tab === "watch" && platform === "twitch") return <WatchSection />;
+  if (tab === "chat") return <ChatSection platform={platform} />;
+  return <StreamSettings platform={platform} />;
+}
+const Modal = ModalRoot as any;
+let expandedModal: { Close: () => void } | null = null;
+let openingExpanded = false;
+function ExpandedContent({ closeModal }: { closeModal?: () => void }) {
+  const [value, pick] = useSelection();
+  useEffect(() => () => { expandedModal = null; openingExpanded = false; }, []);
+  const sections = (["twitch", "youtube", "config"] as Platform[]).flatMap((platform) =>
+    platformSections(platform).map(section => ({ ...section,
+      label: platform === "config" ? t("tab_config") : platformName(platform) + " · " + section.label })));
+  return <Modal closeModal={closeModal} onCancel={closeModal} bAllowFullSize>
+    <ExpandedFrame brand="BoneCast" icon={<BoneCastIcon />} sections={sections}
+      selected={value.platform + ":" + (value.platform === "config" ? "settings" : value.tab)}
+      onSelect={id => { const [platform, tab] = id.split(":"); pick({ platform: platform as Platform, tab: tab as Tab }); }}
+      onClose={() => closeModal?.()} closeLabel={t("view_close")}>
+      <SectionContent key={value.platform + ":" + value.tab} {...value} />
+    </ExpandedFrame>
+  </Modal>;
+}
+function openExpanded() {
+  if (openingExpanded || expandedModal) return;
+  openingExpanded = true;
+  try { Navigation.CloseSideMenus(); expandedModal = showModal(<ExpandedContent />); }
+  catch (error) { openingExpanded = false; console.error("[BoneCast] expanded view", error); }
+}
+const deferredExpanded = deferredView(openExpanded);
+function BoneCastRoute() {
+  useEffect(() => {
+    Navigation.NavigateBack();
+    deferredExpanded.schedule();
+  }, []);
+  return null;
+}
 function Content() {
-  // Deux plateformes indépendantes : chacune a ses sous-onglets et SES réglages.
-  // Seuls les mises à jour et l'« À propos » sont communs (onglet Config).
-  // #1 (dreemur-e) : on rouvre sur la dernière plateforme choisie (Twitch ou
-  // YouTube) au lieu de toujours Twitch → moins de boutons en plein live.
-  // L'onglet ⚙ n'est pas retenu : on y passe, on n'y reste pas.
-  const [platform, setPlatform] = useState<"twitch" | "youtube" | "config">(() => {
-    try { return localStorage.getItem(LAST_PLATFORM_KEY) === "youtube" ? "youtube" : "twitch"; }
-    catch { return "twitch"; }
-  });
-  const [tab, setTab] = useState<"live" | "watch" | "chat" | "settings">("live");
+  const [value, pick] = useSelection();
   const [focus, setFocus] = useState<string | null>(null);
-  const tb = (id: string, active: boolean, onClick: () => void, label: any, color?: string) => (
-    <TabBtn active={active} focused={focus === id} color={color}
-      onClick={onClick}
-      onFocus={() => setFocus(id)}
-      onBlur={() => setFocus((f: any) => (f === id ? null : f))}>
-      {label}
-    </TabBtn>
-  );
-  const pick = (p: "twitch" | "youtube" | "config") => {
-    setPlatform(p); setTab("live");
-    if (p !== "config") { try { localStorage.setItem(LAST_PLATFORM_KEY, p); } catch {} }
-  };
+  const { platform } = value;
   const accent = platform === "youtube" ? YOUTUBE : TWITCH;
-  return (
-    <>
-      <PanelSection>
-        <PanelSectionRow>
-          <div style={{ width: "100%" }}>
-            <TabRow>
-              {tb("p_twitch", platform === "twitch", () => pick("twitch"),
-                <><FaTwitch style={{ verticalAlign: "-0.125em" }} /> Twitch</>)}
-              {tb("p_youtube", platform === "youtube", () => pick("youtube"),
-                <><FaYoutube style={{ verticalAlign: "-0.125em" }} /> YouTube</>, YOUTUBE)}
-              {tb("p_config", platform === "config", () => pick("config"), <IcGear />, "#8e9297")}
-            </TabRow>
-            {platform !== "config" && (
-              <TabRow>
-                {tb("t_live", tab === "live", () => setTab("live"),
-                  <><IcBroadcast /> {t("tab_live")}</>, accent)}
-                {platform === "twitch" && tb("t_watch", tab === "watch", () => setTab("watch"),
-                  <><IcBroadcast /> {t("tab_watch")}</>)}
-                {tb("t_chat", tab === "chat", () => setTab("chat"),
-                  <><IcChat /> {t("tab_chat")}</>, accent)}
-                {tb("t_settings", tab === "settings", () => setTab("settings"),
-                  <><IcSliders /> {t("tab_settings")}</>, accent)}
-              </TabRow>
-            )}
-          </div>
-        </PanelSectionRow>
-      </PanelSection>
-      {platform === "twitch" && tab === "live" && <LiveSection />}
-      {platform === "twitch" && tab === "watch" && <WatchSection />}
-      {platform === "twitch" && tab === "chat" && <ChatSection key="tw-chat" platform="twitch" />}
-      {platform === "twitch" && tab === "settings" && <StreamSettings key="tw" platform="twitch" />}
-      {platform === "youtube" && tab === "live" && <YouTubeSection />}
-      {platform === "youtube" && tab === "chat" && <ChatSection key="yt-chat" platform="youtube" />}
-      {platform === "youtube" && tab === "settings" && <StreamSettings key="yt" platform="youtube" />}
-      {platform === "config" && <ConfigSection />}
-    </>
-  );
+  const button = (id: string, label: any, active: boolean, activate: () => void, color?: string) =>
+    <TabBtn key={id} active={active} focused={focus === id} color={color} onClick={activate}
+      onFocus={() => setFocus(id)} onBlur={() => setFocus(null)}>{label}</TabBtn>;
+  return <>
+    <PanelSection><PanelSectionRow><ActionCard onClick={openExpanded}>{t("view_expanded")}</ActionCard></PanelSectionRow></PanelSection>
+    <PanelSection><PanelSectionRow><div style={{ width: "100%" }}>
+      <TabRow>
+        {button("twitch", <><FaTwitch /> Twitch</>, platform === "twitch", () => pick({ platform: "twitch", tab: "live" }), TWITCH)}
+        {button("youtube", <><FaYoutube /> YouTube</>, platform === "youtube", () => pick({ platform: "youtube", tab: "live" }), YOUTUBE)}
+        {button("config", <><IcGear /> {t("tab_config")}</>, platform === "config", () => pick({ platform: "config", tab: "settings" }))}
+      </TabRow>
+      {platform !== "config" && <TabRow>{platformSections(platform).map(section =>
+        button(section.id, <>{section.icon} {section.label}</>, section.id === platform + ":" + value.tab,
+          () => pick({ platform, tab: section.id.split(":")[1] as Tab }), accent))}</TabRow>}
+    </div></PanelSectionRow></PanelSection>
+    <SectionContent key={platform + ":" + value.tab} {...value} />
+  </>;
 }
 
 // Notif native Steam (DisplayClientNotification, type 1 = popup + son). Le
@@ -1430,6 +1466,8 @@ async function reportFailedUpdate() {
 
 export default definePlugin(() => {
   reportFailedUpdate();
+  routerHook.addRoute("/bonecast", BoneCastRoute);
+  const removeMenu = registerSteamMenu({ id: "bonecast", label: "BoneCast", route: "/bonecast", icon: <BoneCastIcon />, order: 30 });
   // Mode streamer : un stream OU un enregistrement BoneCast est une source de
   // live — le toast finirait aussi dans le fichier enregistré.
   let alertInFlight = false;
@@ -1463,6 +1501,11 @@ export default definePlugin(() => {
     icon: <BoneCastIcon />,
     content: <Content />,
     onDismount() {
+      deferredExpanded.cancel();
+      removeMenu();
+      routerHook.removeRoute("/bonecast");
+      expandedModal?.Close();
+      expandedModal = null; openingExpanded = false;
       clearInterval(liveTimer);
       setLiveSource("bonecast", false);
       clearClickableNotifications("bonecast");

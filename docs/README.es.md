@@ -1,5 +1,9 @@
 # BoneCast 🦴📡
 
+<!-- expanded-navigation -->
+**Vista ampliada** — Abre BoneCast desde el menú principal de Steam o elige **Abrir vista ampliada** en su panel de acceso rápido. La barra lateral ofrece las mismas funciones que el panel.
+
+
 **Nuevo en v0.5.4:** las notificaciones de actualización se pueden abrir desde Steam. Un cuadro de diálogo compatible con el mando muestra detalles y, si falla, un enlace a la versión.
 
 **Twitch y YouTube en el Modo Juego de Steam** — un complemento de [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) para Steam Deck / Bazzite / SteamOS.
