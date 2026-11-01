@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.6 — 2026-11-01
+
+### New
+
+- **An expanded BoneCast view.** Open it from the Steam menu or the Quick Access panel for more room to stream, watch, use chat and adjust settings.
+
+### Improved
+
+- Twitch or YouTube and the selected section follow you between the Quick Access panel and expanded view. Both views use the same controls.
+- The sidebar and content scroll separately, with the close button kept in view on smaller screens.
+- Interface labels and guides are available in all nine supported languages.
+
+### Fixes
+
+- BoneCast, Steamcord and SkullKey keep separate Steam menu entries without adding duplicates when a plugin reloads.
+
+**Full changelog:** [v0.5.5...v0.5.6](https://github.com/Necrosiak/BoneCast/compare/v0.5.5...v0.5.6)
+
+
 ## 0.5.5 — 2026-10-09
 
 - Notify through Steam when a Twitch or YouTube broadcast stops unexpectedly
