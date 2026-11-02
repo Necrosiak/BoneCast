@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.7 — 2026-11-02
+
+### New
+
+- **Hide the BoneCast entry in Steam's main menu.** A new option at the top of Settings removes the entry from the menu; the Quick Access panel stays available.
+
+**Full changelog:** [v0.5.6...v0.5.7](https://github.com/Necrosiak/BoneCast/compare/v0.5.6...v0.5.7)
+
 ## 0.5.6 — 2026-11-01
 
 ### New
