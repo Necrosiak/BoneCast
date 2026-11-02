@@ -35,6 +35,7 @@ let _locale: Locale | null = null;
 
 const T: Record<Locale, Dict> = {
   en: {
+    menu_entry: "BoneCast in the Steam menu", menu_entry_desc: "Show the BoneCast entry in Steam's main menu. The Quick Access panel stays available either way.",
     view_expanded: "Open expanded view", view_close: "Close",
     effort: "Encoder effort",
     effort_light: "Light — less CPU, softer picture",
@@ -245,6 +246,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Type your YouTube channel (@handle) below, or log in.",
   },
   fr: {
+    menu_entry: "BoneCast dans le menu Steam", menu_entry_desc: "Affiche l’entrée BoneCast dans le menu principal de Steam. Le panneau d’accès rapide reste disponible dans tous les cas.",
     view_expanded: "Ouvrir la vue étendue", view_close: "Fermer",
     effort: "Effort de l'encodeur",
     effort_light: "Léger — moins de CPU, image plus douce",
@@ -447,6 +449,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Saisis ta chaîne YouTube (@pseudo) ci-dessous, ou connecte-toi.",
   },
   de: {
+    menu_entry: "BoneCast im Steam-Menü", menu_entry_desc: "Zeigt den BoneCast-Eintrag im Steam-Hauptmenü. Das Schnellzugriffspanel bleibt in jedem Fall verfügbar.",
     view_expanded: "Große Ansicht öffnen", view_close: "Schließen",
     effort: "Encoder-Aufwand",
     effort_light: "Leicht — weniger CPU, weicheres Bild",
@@ -649,6 +652,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Gib unten deinen YouTube-Kanal (@Name) ein oder melde dich an.",
   },
   es: {
+    menu_entry: "BoneCast en el menú de Steam", menu_entry_desc: "Muestra la entrada de BoneCast en el menú principal de Steam. El panel de acceso rápido sigue disponible en todo caso.",
     view_expanded: "Abrir vista ampliada", view_close: "Cerrar",
     effort: "Esfuerzo del codificador",
     effort_light: "Ligero — menos CPU, imagen más suave",
@@ -851,6 +855,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Escribe tu canal de YouTube (@usuario) abajo, o inicia sesión.",
   },
   it: {
+    menu_entry: "BoneCast nel menu di Steam", menu_entry_desc: "Mostra la voce BoneCast nel menu principale di Steam. Il pannello di accesso rapido resta comunque disponibile.",
     view_expanded: "Apri vista estesa", view_close: "Chiudi",
     effort: "Sforzo dell'encoder",
     effort_light: "Leggero — meno CPU, immagine più morbida",
@@ -1053,6 +1058,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Scrivi qui sotto il tuo canale YouTube (@nome), oppure accedi.",
   },
   pt: {
+    menu_entry: "BoneCast no menu do Steam", menu_entry_desc: "Mostra a entrada BoneCast no menu principal do Steam. O painel de acesso rápido continua disponível em qualquer caso.",
     view_expanded: "Abrir vista ampliada", view_close: "Fechar",
     effort: "Esforço do codificador",
     effort_light: "Leve — menos CPU, imagem mais suave",
@@ -1255,6 +1261,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Digite seu canal do YouTube (@nome) abaixo, ou entre.",
   },
   nl: {
+    menu_entry: "BoneCast in het Steam-menu", menu_entry_desc: "Toont het BoneCast-item in het Steam-hoofdmenu. Het sneltoegangspaneel blijft altijd beschikbaar.",
     view_expanded: "Uitgebreide weergave openen", view_close: "Sluiten",
     effort: "Encoder-inspanning",
     effort_light: "Licht — minder CPU, zachter beeld",
@@ -1457,6 +1464,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Typ hieronder je YouTube-kanaal (@naam), of log in.",
   },
   pl: {
+    menu_entry: "BoneCast w menu Steam", menu_entry_desc: "Pokazuje pozycję BoneCast w głównym menu Steam. Panel szybkiego dostępu pozostaje dostępny w każdym przypadku.",
     view_expanded: "Otwórz widok rozszerzony", view_close: "Zamknij",
     effort: "Wysiłek enkodera",
     effort_light: "Lekki — mniej CPU, łagodniejszy obraz",
@@ -1659,6 +1667,7 @@ const T: Record<Locale, Dict> = {
     yt_channel_none: "Wpisz poniżej swój kanał YouTube (@nazwa) albo się zaloguj.",
   },
   ru: {
+    menu_entry: "BoneCast в меню Steam", menu_entry_desc: "Показывает пункт BoneCast в главном меню Steam. Панель быстрого доступа остаётся доступной в любом случае.",
     view_expanded: "Открыть расширенный вид", view_close: "Закрыть",
     effort: "Нагрузка кодировщика",
     effort_light: "Лёгкая — меньше CPU, мягче картинка",

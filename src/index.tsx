@@ -25,7 +25,7 @@ import { focusHalo, ActionCard, TWITCH, YOUTUBE, DANGER } from "./components/Sty
 import { t } from "./i18n";
 import { deferredView } from "./deferredView";
 import { ExpandedFrame, ExpandedSection } from "./ExpandedFrame";
-import { registerSteamMenu } from "./steamMenu";
+import { menuEntryEnabled, patchMenu, setMenuEntryEnabled } from "./menuEntry";
 import { clearClickableNotifications, notifyClickable } from "./clickableNotify";
 
 const B = DialogButton as any;
@@ -1055,9 +1055,24 @@ function AboutSection() {
   );
 }
 
+// L'entrée « BoneCast » du menu principal Steam est facultative ; le panneau
+// d'accès rapide reste disponible quand elle est retirée (Steamcord #86).
+function MenuEntrySection() {
+  const [on, setOn] = useState(menuEntryEnabled);
+  return (
+    <PanelSection>
+      <PanelSectionRow>
+        <ToggleField label={t("menu_entry")} description={t("menu_entry_desc")} checked={on}
+          onChange={(v: boolean) => { setOn(v); setMenuEntryEnabled(v); }} bottomSeparator="none" />
+      </PanelSectionRow>
+    </PanelSection>
+  );
+}
+
 function ConfigSection() {
   return (
     <>
+      <MenuEntrySection />
       <UpdaterSection />
       <AccountsSection />
       <AboutSection />
@@ -1467,7 +1482,7 @@ async function reportFailedUpdate() {
 export default definePlugin(() => {
   reportFailedUpdate();
   routerHook.addRoute("/bonecast", BoneCastRoute);
-  const removeMenu = registerSteamMenu({ id: "bonecast", label: "BoneCast", route: "/bonecast", icon: <BoneCastIcon />, order: 30 });
+  const removeMenu = patchMenu();
   // Mode streamer : un stream OU un enregistrement BoneCast est une source de
   // live — le toast finirait aussi dans le fichier enregistré.
   let alertInFlight = false;
