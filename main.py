@@ -98,6 +98,49 @@ async def _recheck(updater):
     return info
 
 
+def _decky_loader_identity():
+    """(pid, start time) of the Decky Loader process this backend runs under, or
+    None (not on Linux, or not started by Decky)."""
+    import os
+    pid = os.getppid()
+    for _ in range(8):
+        if pid <= 1:
+            return None
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmdline = f.read()
+            with open(f"/proc/{pid}/stat") as f:
+                fields = f.read().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            return None
+        if cmdline.startswith(b"Decky Loader"):
+            return pid, fields[19]
+        pid = int(fields[1])
+    return None
+
+
+async def _exit_with_decky_loader(log, interval=15):
+    """A restart of plugin_loader leaves the old plugin backends running on
+    their own (measured 02/11/2026: eight orphans, one growing to 4.5 GB).
+    Leave as soon as the Decky Loader that started this backend is gone."""
+    import asyncio
+    import os
+    identity = _decky_loader_identity()
+    if identity is None:
+        return
+    pid, started = identity
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                alive = f.read().rsplit(")", 1)[1].split()[19] == started
+        except (OSError, IndexError):
+            alive = False
+        if not alive:
+            log("Decky Loader is gone: stopping this orphaned plugin backend")
+            os._exit(0)
+
+
 class Plugin:
     # ── OAuth Twitch (device code flow, client public — pas de secret) ───────
     _TWITCH_CLIENT_ID = "idbnwqbkqyrzesxct1ztkejyf5aj6z"
@@ -1262,9 +1305,40 @@ class Plugin:
 
     @classmethod
     async def _default_source(cls):
-        """Source micro par défaut (pour l'option « ajouter le micro »)."""
-        src = await cls._pactl_default("get-default-source")
-        return src or "@DEFAULT_SOURCE@"
+        """Source micro de l'option « ajouter le micro » : celle par défaut, sauf
+        si c'est une source virtuelle (micro muet de Steamcord pendant un Go Live,
+        monitor…) : on prend alors le vrai micro branché."""
+        default = await cls._pactl_default("get-default-source")
+        from asyncio import create_subprocess_exec
+        from subprocess import PIPE, DEVNULL
+        names = []
+        try:
+            p = await create_subprocess_exec(
+                "pactl", "list", "short", "sources", stdout=PIPE, stderr=DEVNULL, env=bcenv.user_env())
+            out, _ = await p.communicate()
+            names = [l.split("\t")[1] for l in out.decode().splitlines() if l.count("\t") >= 1]
+        except Exception:
+            pass
+        mic = cls._pick_mic(default, names)
+        if mic and mic != default:
+            logger.info(f"[mic] source par défaut virtuelle ({default}) → micro réel {mic}")
+        return mic or default or "@DEFAULT_SOURCE@"
+
+    @staticmethod
+    def _is_real_mic(name):
+        n = (name or "").lower()
+        return bool(n) and not n.startswith("@") and not n.endswith(".monitor") \
+            and not n.startswith("steamcord_")
+
+    @classmethod
+    def _pick_mic(cls, default, names):
+        """Le défaut s'il est un vrai micro, sinon le premier micro matériel."""
+        if cls._is_real_mic(default):
+            return default
+        for n in names:
+            if cls._is_real_mic(n) and n.startswith(("alsa_input.", "bluez_input.")):
+                return n
+        return None
 
     # ── Détection des encodeurs (matériel VAAPI si dispo, sinon logiciel) ─────
     @classmethod
@@ -2373,6 +2447,7 @@ class Plugin:
     @classmethod
     async def _main(cls):
         logger.info("BoneCast backend chargé")
+        create_task(_exit_with_decky_loader(logger.warning))
         create_task(cls._autoupdate_check())
         # Live YouTube encore ouvert d'avant (redémarrage, crash, mise à jour du
         # plugin) : Démarrer le reprend pendant la fenêtre, sinon on le termine.
