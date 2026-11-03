@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.8 — 2026-11-03
+
+### Fixes
+
+- **"Add microphone" uses your real microphone.** When Steamcord is installed on a device without a microphone, the system's default microphone can be Steamcord's silent one. BoneCast then streamed silence instead of your voice. It now skips virtual sources and uses the microphone you actually plugged in.
+- BoneCast's background process now stops on its own if Decky Loader goes away without stopping it, instead of staying in memory.
+
+**Full changelog:** [v0.5.7...v0.5.8](https://github.com/Necrosiak/BoneCast/compare/v0.5.7...v0.5.8)
+
 ## 0.5.7 — 2026-11-02
 
 ### New
