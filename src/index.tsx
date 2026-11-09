@@ -79,13 +79,35 @@ const TabRow = ({ children }: any) => (
   </Focusable>
 );
 
+// Champ de titre isolé (#2) : son brouillon vit ici, si bien qu'une frappe ne
+// redessine que ce champ, pas toute la section Live (contrôles du stream,
+// réglages, sondages). Avec le clavier tactile du Deck, ces rendus lourds à
+// chaque caractère faisaient trembler le champ et perdre des frappes.
+function TitleEditor({ placeholder, color, onSave }: {
+  placeholder: string; color: string; onSave: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  return (
+    <>
+      <PanelSectionRow>
+        <TextField label={t("title_label")} value={draft} placeholder={placeholder}
+          onChange={(e: any) => setDraft(e?.target?.value ?? "")} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ActionCard color={color} disabled={!draft} onClick={() => { onSave(draft); setDraft(""); }}>
+          <IcSave /> {t("save_title")}
+        </ActionCard>
+      </PanelSectionRow>
+    </>
+  );
+}
+
 // ── Onglet LIVE : login OAuth + titre + go live + BRB/clip/micro ─────────────
 function LiveSection() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [login, setLogin] = useState("");
   const [keySet, setKeySet] = useState(false);
   const [title, setTitle] = useState("");
-  const [titleInput, setTitleInput] = useState("");
   const [gameName, setGameName] = useState("");
   // device flow
   const [authing, setAuthing] = useState(false);
@@ -129,9 +151,9 @@ function LiveSection() {
       else setAuthMsg("⚠️ " + (r?.error || t("err_generic")));
     } finally { setAuthBusy(false); }
   };
-  const saveTitle = () =>
-    call<[string], any>("set_title", titleInput)
-      .then(() => { setTitle(titleInput); setTitleInput(""); refresh(); }).catch(() => {});
+  const saveTitle = (value: string) =>
+    call<[string], any>("set_title", value)
+      .then(() => { setTitle(value); refresh(); }).catch(() => {});
 
   if (!loggedIn) {
     return (
@@ -166,16 +188,7 @@ function LiveSection() {
           <FaTwitch style={{ verticalAlign: "-0.125em" }} /> {login ? "@" + login : t("connected")}
         </div>
       </PanelSectionRow>
-      <PanelSectionRow>
-        <TextField label={t("title_label")} value={titleInput}
-          placeholder={title || t("title_placeholder")}
-          onChange={(e: any) => setTitleInput(e?.target?.value ?? "")} />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ActionCard color={TWITCH} disabled={!titleInput} onClick={saveTitle}>
-          <IcSave /> {t("save_title")}
-        </ActionCard>
-      </PanelSectionRow>
+      <TitleEditor placeholder={title || t("title_placeholder")} color={TWITCH} onSave={saveTitle} />
       <PanelSectionRow>
         <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
           <IcController /> {t("category_auto")}{gameName ? ` : ${gameName}` : " " + t("category_detect")}
@@ -414,7 +427,6 @@ const platformName = (p?: string) =>
 // ── Onglet YOUTUBE : connexion Google (ou clé manuelle) + titre + live ──────
 function YouTubeSection() {
   const [yt, setYt] = useState<any>({});
-  const [titleInput, setTitleInput] = useState("");
   const [keyInput, setKeyInput] = useState("");
   const [authing, setAuthing] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
@@ -488,17 +500,8 @@ function YouTubeSection() {
       )}
       {loggedIn && (
         <>
-          <PanelSectionRow>
-            <TextField label={t("title_label")} value={titleInput}
-              placeholder={yt.title || t("title_placeholder")}
-              onChange={(e: any) => setTitleInput(e?.target?.value ?? "")} />
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <ActionCard color={YOUTUBE} disabled={!titleInput}
-              onClick={() => { save({ title: titleInput }); setTitleInput(""); }}>
-              <IcSave /> {t("save_title")}
-            </ActionCard>
-          </PanelSectionRow>
+          <TitleEditor placeholder={yt.title || t("title_placeholder")} color={YOUTUBE}
+            onSave={(value) => save({ title: value })} />
           <PanelSectionRow>
             <Dropdown strDefaultLabel={t("yt_privacy")} selectedOption={yt.privacy || "public"}
               rgOptions={[

@@ -36,6 +36,7 @@ jobs:
           node tests/steam-menu-lifecycle.test.cjs
           node --test tests/test-menu-entry-toggle.cjs
           node tests/deferred-view.test.cjs
+          node --test tests/test-title-editor.cjs
 
       - name: Download Decky Plugin CLI
         run: |
