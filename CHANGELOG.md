@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.9 — 2026-11-09
+
+### Fixes
+
+- The stream title field no longer drops letters or jitters while typing, on both Twitch and YouTube. Typing now only updates the field itself instead of the whole Live section ([#2](https://github.com/Necrosiak/BoneCast/issues/2)).
+
+### Thanks
+
+Thanks to [@dreemur-e](https://github.com/dreemur-e) for the report ([#2](https://github.com/Necrosiak/BoneCast/issues/2)).
+
+**Full changelog:** [v0.5.8...v0.5.9](https://github.com/Necrosiak/BoneCast/compare/v0.5.8...v0.5.9)
+
 ## 0.5.8 — 2026-11-03
 
 ### Fixes
