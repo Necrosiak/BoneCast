@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.10 — 2026-11-10
+
+### Fixes
+
+- Turning off the BoneCast entry in Steam's main menu now lasts after Steam restarts. BoneCast also saves this choice in its own settings, because Steam could reload an older value and bring the entry back (same fix as [Steamcord #86](https://github.com/Necrosiak/Steamcord/issues/86)).
+
+**Full changelog:** [v0.5.9...v0.5.10](https://github.com/Necrosiak/BoneCast/compare/v0.5.9...v0.5.10)
+
 ## 0.5.9 — 2026-11-09
 
 ### Fixes
