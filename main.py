@@ -234,6 +234,35 @@ class Plugin:
             dump(cfg, f)
         os.chmod(p, 0o600)     # tokens + clé = secrets
 
+    # Steam main-menu entry (same option as Steamcord #86). Steam's localStorage
+    # can come back with an older value after a restart, so this file decides.
+    @classmethod
+    def _menu_path(cls):
+        import decky  # type: ignore
+        return os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "menu-entry.json")
+
+    @classmethod
+    async def get_menu_entry(cls):
+        try:
+            with open(cls._menu_path(), encoding="utf-8") as f:
+                value = load(f).get("menu")
+        except Exception:
+            return None
+        return value if value in ("on", "off") else None
+
+    @classmethod
+    async def set_menu_entry(cls, on=True):
+        p = cls._menu_path()
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p + ".tmp", "w", encoding="utf-8") as f:
+                dump({"menu": "on" if on else "off"}, f)
+            os.replace(p + ".tmp", p)
+        except Exception as e:
+            logger.warning(f"save {p} failed: {e!r}")
+            return {"ok": False}
+        return {"ok": True}
+
     @classmethod
     async def get_config(cls):
         """État exposé au frontend — JAMAIS de token/clé en clair."""
