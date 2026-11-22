@@ -13,6 +13,7 @@ export const ACCENT = "#5865f2";
 export const DANGER = "#ed4245";   // stop / disconnect / logout
 export const TWITCH = "#9146ff";   // Twitch streaming
 export const YOUTUBE = "#ff0033";  // YouTube streaming
+export const CUSTOM = "#00b8a9";   // custom RTMP server
 export const ONLINE = "#23a55a";   // active / online
 
 // The Steam DialogButton's native focus paints a light background + dark text

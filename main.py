@@ -46,15 +46,21 @@ def sys_python():
     return _sh.which("python3") or _sh.which("python") or "/usr/bin/python"
 
 
-async def stream_watcher(stream, is_err=False, prefix="[bonecast]"):
-    """Recopie stdout/stderr d'un sous-process dans le journal Decky."""
+async def stream_watcher(stream, is_err=False, prefix="[bonecast]", secrets=()):
+    """Recopie stdout/stderr d'un sous-process dans le journal Decky.
+
+    secrets : chaînes masquées avant écriture (clé de stream que ffmpeg
+    recopie dans ses erreurs avec l'adresse RTMP complète)."""
     if stream is None:
         return
+    secrets = [x for x in secrets if isinstance(x, str) and len(x) >= 4]
     while True:
         line = await stream.readline()
         if not line:
             break
         msg = line.decode(errors="ignore").rstrip()
+        for x in secrets:
+            msg = msg.replace(x, "***")
         if msg:
             (logger.warning if is_err else logger.info)(f"{prefix} {msg}")
 
@@ -162,7 +168,7 @@ class Plugin:
     _start_stream_lock = None                   # un seul lancement de live à la fois
     _start_overlay_lock = None                  # un seul lancement d'overlay à la fois
     _stream_proc = None                        # ffmpeg RTMP (live Twitch ou YouTube)
-    _stream_platform = None                    # "twitch" | "youtube" | "record" (un seul à la fois)
+    _stream_platform = None                    # "twitch" | "youtube" | "custom" | "record" (un seul à la fois)
     _camera_feeder = None                      # gst_camera.py --stdout → tuyau → ffmpeg
     # Reprise du live (BoneCast #1, demandé par dreemur-e) : réseau coupé, ffmpeg
     # mort, « Arrêter » par erreur ou redémarrage de la machine → pendant
@@ -306,7 +312,57 @@ class Plugin:
                 "overlay_on": ov_pf == "youtube",
                 "overlay": {**cls._OVERLAY_DEFAULTS, **(yt.get("overlay") or {})},
             },
+            # RTMP personnalisé (TikTok, Kick… BoneCast #4) : l'adresse du
+            # serveur est affichée, la clé jamais.
+            "custom": {
+                "url": (cfg.get("custom") or {}).get("url", ""),
+                "key_set": bool((cfg.get("custom") or {}).get("key")),
+                "stream": {**cls._STREAM_DEFAULTS, **((cfg.get("custom") or {}).get("stream") or {})},
+            },
         }
+
+    @staticmethod
+    def _valid_rtmp_url(url):
+        from urllib.parse import urlparse
+        if not isinstance(url, str) or len(url) > 500 or any(c.isspace() or ord(c) < 32 for c in url):
+            return False
+        try:
+            u = urlparse(url)
+            u.port
+        except ValueError:
+            return False
+        return u.scheme in ("rtmp", "rtmps") and bool(u.hostname)
+
+    @classmethod
+    async def custom_set_settings(cls, settings=None):
+        """Serveur RTMP(S) et clé de stream personnalisés. Chaîne vide = effacer."""
+        s = settings if isinstance(settings, dict) else {}
+        cfg = cls._load_cfg()
+        cu = cfg.setdefault("custom", {})
+        if isinstance(s.get("url"), str):
+            url = s["url"].strip()
+            if url and not cls._valid_rtmp_url(url):
+                return {"ok": False, "error": "bad_url"}
+            if url:
+                cu["url"] = url
+            else:
+                cu.pop("url", None)
+        if isinstance(s.get("key"), str):
+            k = s["key"].strip()
+            if len(k) > 500 or any(c.isspace() or ord(c) < 32 for c in k):
+                return {"ok": False, "error": "bad_key"}
+            if k:
+                cu["key"] = k
+            else:
+                cu.pop("key", None)
+        cls._save_cfg(cfg)
+        return {"ok": True}
+
+    @staticmethod
+    def _rtmp_target(ingest, key):
+        """Adresse finale : serveur + « / » + clé (la clé peut être vide quand le
+        service la met déjà dans l'adresse)."""
+        return f"{ingest.rstrip('/')}/{key}" if key else ingest
 
     @staticmethod
     def _steamcord_present():
@@ -1489,7 +1545,8 @@ class Plugin:
         """Persiste les réglages de qualité/encodeur (par compte ET par plateforme :
         Twitch et YouTube ont chacun les leurs, rien n'est partagé entre eux)."""
         cfg = cls._load_cfg()
-        holder = cls._yt_cfg(cfg) if platform == "youtube" else cfg
+        holder = (cls._yt_cfg(cfg) if platform == "youtube"
+                  else cfg.setdefault("custom", {}) if platform == "custom" else cfg)
         st = {**cls._STREAM_DEFAULTS, **(holder.get("stream") or {})}
         if isinstance(settings, dict):
             for k in cls._STREAM_DEFAULTS:
@@ -1755,7 +1812,7 @@ class Plugin:
         if not _sh.which("ffmpeg"):
             return {"ok": False, "error": "no_ffmpeg",
                     "hint": cls._pkg_hint("ffmpeg", "ffmpeg", "ffmpeg")}
-        platform = "youtube" if platform == "youtube" else "twitch"
+        platform = platform if platform in ("youtube", "custom") else "twitch"
         want = "record" if record_only else platform
         # UN seul live à la fois : c'est le même ffmpeg, la même capture et le
         # même micro. Lancer YouTube pendant un live Twitch (ou l'inverse) est
@@ -1780,6 +1837,12 @@ class Plugin:
             if not key:
                 return {"ok": False, "error": "no_key"}
             ingest = cfg.get("ingest") or cls._TWITCH_INGEST
+        elif not record_only and platform == "custom":
+            cu = cfg.get("custom") or {}
+            ingest = cu.get("url")
+            key = cu.get("key") or ""
+            if not ingest or not cls._valid_rtmp_url(ingest):
+                return {"ok": False, "error": "no_custom"}
         elif not record_only:
             yt = cfg.get("youtube") or {}
             if (yt.get("oauth") or {}).get("access_token"):
@@ -1801,7 +1864,8 @@ class Plugin:
         gst_hint = await cls._gst_python_hint()
         if gst_hint:
             return {"ok": False, "error": "no_gst", "hint": gst_hint}
-        holder = (cfg.get("youtube") or {}) if platform == "youtube" else cfg
+        holder = ((cfg.get("youtube") or {}) if platform == "youtube"
+                  else (cfg.get("custom") or {}) if platform == "custom" else cfg)
         st = {**cls._STREAM_DEFAULTS, **(holder.get("stream") or {})}
         discord_on = bool(st.get("discord_audio"))
         # Pont audio Discord : si Steamcord présent, isole Vesktop dans son sink
@@ -1919,10 +1983,10 @@ class Plugin:
             # reprendre le live ou prévenir l'utilisateur. onfail=ignore
             # laissait l'enregistrement tourner avec un faux statut « LIVE ».
             args += ["-flags", "+global_header", "-f", "tee",
-                     f"[f=flv:onfail=abort]{ingest}/{key}"
+                     f"[f=flv:onfail=abort]{cls._rtmp_target(ingest, key)}"
                      f"|[f=matroska]{cls._record_path}"]
         else:
-            args += ["-f", "flv", f"{ingest}/{key}"]
+            args += ["-f", "flv", cls._rtmp_target(ingest, key)]
         logger.info(f"[stream] encodeur={enc} {w or 'source'}x{h or ''}@{fps} "
                     f"{vb}kbps mic={bool(mic_src)} discord={bool(discord_on and disc_mon)} "
                     f"record={cls._record_path or '-'} record_only={record_only}")
@@ -1936,8 +2000,10 @@ class Plugin:
             await cls._start_camera_feeder(wfd, (cap_w, cap_h), cap_fps)
             os.close(rfd); os.close(wfd)
             rfd = wfd = None
-            create_task(stream_watcher(cls._stream_proc.stdout, prefix="[stream]"))
-            create_task(stream_watcher(cls._stream_proc.stderr, True, prefix="[stream]"))
+            create_task(stream_watcher(cls._stream_proc.stdout, prefix="[stream]",
+                                      secrets=(key,) if key else ()))
+            create_task(stream_watcher(cls._stream_proc.stderr, True, prefix="[stream]",
+                                      secrets=(key,) if key else ()))
             create_task(cls._watch_stream_exit(cls._stream_proc))
             # Micro : prépare le mute à la volée (découvre le source-output ffmpeg).
             cls._reset_mic_state()
@@ -1984,7 +2050,7 @@ class Plugin:
         win = cls._resume_window()
         now = time()
         until = None
-        if win and plat in ("twitch", "youtube"):
+        if win and plat in ("twitch", "youtube", "custom"):
             prev = cls._resume_until_prev
             if prev and now < prev and now - cls._stream_started < 20:
                 until = prev                     # la reprise vient de retomber : même fenêtre
@@ -2006,7 +2072,7 @@ class Plugin:
 
     @classmethod
     def _queue_stream_alert(cls, platform, exit_code=None):
-        if platform in ("twitch", "youtube"):
+        if platform in ("twitch", "youtube", "custom"):
             cls._stream_alert_seq += 1
             cls._pending_stream_alert = {"platform": platform,
                                          "exit_code": exit_code,
@@ -2057,6 +2123,8 @@ class Plugin:
         if platform == "youtube":
             yt = cfg.get("youtube") or {}
             url = yt.get("api_ingest") or yt.get("ingest") or cls._YT_INGEST
+        elif platform == "custom":
+            url = (cfg.get("custom") or {}).get("url") or ""
         else:
             url = cfg.get("ingest") or cls._TWITCH_INGEST
         u = urlparse(url)

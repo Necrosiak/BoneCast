@@ -21,7 +21,7 @@ import {
   BoneCastIcon, IcBroadcast, IcChat, IcController, IcFilm, IcGear, IcGithub, IcKey, IcSliders,
   IcLogout, IcMic, IcMicMute, IcRefresh, IcSave, IcSend,
 } from "./components/Icons";
-import { focusHalo, ActionCard, TWITCH, YOUTUBE, DANGER } from "./components/Styled";
+import { focusHalo, ActionCard, TWITCH, YOUTUBE, CUSTOM, DANGER } from "./components/Styled";
 import { t } from "./i18n";
 import { deferredView } from "./deferredView";
 import { ExpandedFrame, ExpandedSection } from "./ExpandedFrame";
@@ -218,7 +218,7 @@ function LiveSection() {
 // qu'un live à la fois : si l'autre plateforme est à l'antenne, on l'affiche et
 // le bouton reste bloqué au lieu d'échouer.
 function StreamControls({ platform, color, ready, beforeStart, clip }: {
-  platform: "twitch" | "youtube"; color: string; ready: boolean;
+  platform: StreamPlatform; color: string; ready: boolean;
   beforeStart?: () => Promise<void>; clip?: boolean;
 }) {
   const [live, setLive] = useState<string | null>(null);  // plateforme à l'antenne
@@ -252,8 +252,7 @@ function StreamControls({ platform, color, ready, beforeStart, clip }: {
 
   useEffect(() => {
     call<[], any>("get_config").then((c: any) => {
-      const st = platform === "youtube" ? c?.youtube?.stream : c?.stream;
-      setStMic(!!st?.mic);
+      setStMic(!!streamCfg(c, platform)?.mic);
     }).catch(() => {});
     const poll = () => call<[], any>("get_stream_status").then(apply).catch(() => {});
     poll();
@@ -265,6 +264,7 @@ function StreamControls({ platform, color, ready, beforeStart, clip }: {
     r?.error === "busy" ? t("err_busy", { p: platformName(r?.platform) })
     : r?.error === "no_key" ? t("err_no_key")
     : r?.error === "no_yt_key" ? t("err_no_yt_key")
+    : r?.error === "no_custom" ? t("err_no_custom")
     : r?.error === "yt_api" ? ytReason(r?.hint, t("err_live_failed"))
     : r?.error === "no_ffmpeg" ? "⚠️ " + (r?.hint || t("hint_no_ffmpeg"))
     : r?.error === "no_x264" ? "⚠️ " + (r?.hint || t("hint_no_x264"))
@@ -367,7 +367,8 @@ function StreamControls({ platform, color, ready, beforeStart, clip }: {
           <div style={{ fontSize: 12, fontWeight: 800, color: DANGER, textAlign: "center" }}>
             {recOnly ? t("status_rec")
              : brb ? t("status_brb")
-             : platform === "youtube" ? t("status_live_yt") : t("status_live")}
+             : platform === "youtube" ? t("status_live_yt")
+             : platform === "custom" ? t("status_live_custom") : t("status_live")}
           </div>
         </PanelSectionRow>
       )}
@@ -422,7 +423,83 @@ const ytReason = (reason?: string, fallback?: string) => {
 };
 
 const platformName = (p?: string) =>
-  p === "youtube" ? "YouTube" : p === "record" ? t("recording_name") : "Twitch";
+  p === "youtube" ? "YouTube" : p === "custom" ? t("custom_name")
+  : p === "record" ? t("recording_name") : "Twitch";
+
+type StreamPlatform = "twitch" | "youtube" | "custom";
+// Réglages de qualité propres à chaque plateforme (rien n'est partagé).
+const streamCfg = (c: any, p: StreamPlatform) =>
+  p === "youtube" ? c?.youtube?.stream : p === "custom" ? c?.custom?.stream : c?.stream;
+
+// ── Onglet RTMP PERSONNALISÉ : serveur + clé fournis par le service (#4) ─────
+// TikTok, Kick, Facebook… donnent une adresse de serveur et une clé de stream.
+// L'adresse est affichée ; la clé, jamais (seulement « enregistrée »).
+function CustomSection() {
+  const [cu, setCu] = useState<any>({});
+  const [urlInput, setUrlInput] = useState("");
+  const [keyInput, setKeyInput] = useState("");
+  const [msg, setMsg] = useState("");
+  const refresh = () =>
+    call<[], any>("get_config").then((c: any) => {
+      const v = c?.custom || {};
+      setCu(v); setUrlInput((prev) => prev || v.url || "");
+    }).catch(() => {});
+  useEffect(() => { refresh(); }, []);
+  const save = async (patch: any) => {
+    setMsg("");
+    const r: any = await call<[any], any>("custom_set_settings", patch).catch(() => null);
+    if (!r?.ok) setMsg(r?.error === "bad_url" ? t("err_bad_url")
+      : r?.error === "bad_key" ? t("err_bad_key") : t("err_generic"));
+    else setMsg(t("custom_saved"));
+    refresh();
+  };
+  const ready = !!cu.url;
+  return (
+    <PanelSection title={t("custom_title")}>
+      <PanelSectionRow>
+        <div style={{ fontSize: 11, opacity: 0.75, color: "#fff" }}>
+          <IcKey /> {t("custom_intro")}
+        </div>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <TextField label={t("custom_url_label")} value={urlInput}
+          placeholder="rtmp://…"
+          onChange={(e: any) => setUrlInput(e?.target?.value ?? "")} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <TextField label={t("custom_key_label")} value={keyInput} bIsPassword
+          placeholder={cu.key_set ? t("yt_key_saved") : ""}
+          onChange={(e: any) => setKeyInput(e?.target?.value ?? "")} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <Focusable flow-children="row" style={{ display: "flex", gap: 6, width: "100%" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ActionCard color={CUSTOM} disabled={!urlInput.trim() && !keyInput.trim()}
+              onClick={() => {
+                const patch: any = { url: urlInput };
+                if (keyInput.trim()) patch.key = keyInput;
+                save(patch); setKeyInput("");
+              }}>
+              <IcSave /> {t("custom_save")}
+            </ActionCard>
+          </div>
+          {(cu.url || cu.key_set) && (
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <ActionCard color={DANGER} onClick={() => { setUrlInput(""); save({ url: "", key: "" }); }}>
+                {t("custom_clear")}
+              </ActionCard>
+            </div>
+          )}
+        </Focusable>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <div style={{ fontSize: 10, opacity: 0.6, color: "#fff" }}>{t("custom_help")}</div>
+      </PanelSectionRow>
+      {msg && <PanelSectionRow><div style={{ fontSize: 11, color: "#fff" }}>{msg}</div></PanelSectionRow>}
+      <StreamControls platform="custom" color={CUSTOM} ready={ready} />
+    </PanelSection>
+  );
+}
 
 // ── Onglet YOUTUBE : connexion Google (ou clé manuelle) + titre + live ──────
 function YouTubeSection() {
@@ -776,7 +853,7 @@ function ResumeWindow() {
   );
 }
 
-function StreamSettings({ platform }: { platform: "twitch" | "youtube" }) {
+function StreamSettings({ platform }: { platform: StreamPlatform }) {
   const [encoders, setEncoders] = useState<string[]>(["software"]);
   const [steamcord, setSteamcord] = useState(false);
   const [st, setSt] = useState<any>({ resolution: "720p", fps: 30, bitrate: 4500,
@@ -784,7 +861,7 @@ function StreamSettings({ platform }: { platform: "twitch" | "youtube" }) {
 
   useEffect(() => {
     call<[], any>("get_config").then((c: any) => {
-      const cur = platform === "youtube" ? c?.youtube?.stream : c?.stream;
+      const cur = streamCfg(c, platform);
       if (cur) setSt((p: any) => ({ ...p, ...cur }));
       setSteamcord(!!c?.steamcord);
     }).catch(() => {});
@@ -1278,12 +1355,15 @@ function WatchSection() {
 
 const LAST_PLATFORM_KEY = "bonecast_last_platform";
 
-type Platform = "twitch" | "youtube" | "config";
+type Platform = StreamPlatform | "config";
 type Tab = "live" | "watch" | "chat" | "settings";
 type Selection = { platform: Platform; tab: Tab };
 const SELECTION_EVENT = "bonecast-navigation";
 let selection: Selection = { platform: (() => {
-  try { return localStorage.getItem(LAST_PLATFORM_KEY) === "youtube" ? "youtube" : "twitch"; }
+  try {
+    const v = localStorage.getItem(LAST_PLATFORM_KEY);
+    return v === "youtube" || v === "custom" ? v : "twitch";
+  }
   catch { return "twitch"; }
 })(), tab: "live" };
 function useSelection(): [Selection, (value: Selection) => void] {
@@ -1303,7 +1383,11 @@ function useSelection(): [Selection, (value: Selection) => void] {
 // One catalogue and the SAME business components for both interfaces.
 function platformSections(platform: Platform): ExpandedSection[] {
   if (platform === "config") return [{ id: "config:settings", label: t("tab_settings"), icon: <IcGear /> }];
-  const color = platform === "twitch" ? TWITCH : YOUTUBE;
+  const color = platform === "twitch" ? TWITCH : platform === "custom" ? CUSTOM : YOUTUBE;
+  if (platform === "custom") return [
+    { id: "custom:live", label: t("tab_live"), icon: <IcBroadcast />, color },
+    { id: "custom:settings", label: t("tab_settings"), icon: <IcSliders />, color },
+  ];
   return [
     { id: platform + ":live", label: t("tab_live"), icon: <IcBroadcast />, color },
     ...(platform === "twitch" ? [{ id: "twitch:watch", label: t("tab_watch"), icon: <EyeIcon />, color }] : []),
@@ -1313,9 +1397,10 @@ function platformSections(platform: Platform): ExpandedSection[] {
 }
 function SectionContent({ platform, tab }: Selection) {
   if (platform === "config") return <ConfigSection />;
-  if (tab === "live") return platform === "twitch" ? <LiveSection /> : <YouTubeSection />;
+  if (tab === "live") return platform === "twitch" ? <LiveSection />
+    : platform === "custom" ? <CustomSection /> : <YouTubeSection />;
   if (tab === "watch" && platform === "twitch") return <WatchSection />;
-  if (tab === "chat") return <ChatSection platform={platform} />;
+  if (tab === "chat" && platform !== "custom") return <ChatSection platform={platform} />;
   return <StreamSettings platform={platform} />;
 }
 const Modal = ModalRoot as any;
@@ -1324,7 +1409,7 @@ let openingExpanded = false;
 function ExpandedContent({ closeModal }: { closeModal?: () => void }) {
   const [value, pick] = useSelection();
   useEffect(() => () => { expandedModal = null; openingExpanded = false; }, []);
-  const sections = (["twitch", "youtube", "config"] as Platform[]).flatMap((platform) =>
+  const sections = (["twitch", "youtube", "custom", "config"] as Platform[]).flatMap((platform) =>
     platformSections(platform).map(section => ({ ...section,
       label: platform === "config" ? t("tab_config") : platformName(platform) + " · " + section.label })));
   return <Modal closeModal={closeModal} onCancel={closeModal} bAllowFullSize>
@@ -1354,7 +1439,7 @@ function Content() {
   const [value, pick] = useSelection();
   const [focus, setFocus] = useState<string | null>(null);
   const { platform } = value;
-  const accent = platform === "youtube" ? YOUTUBE : TWITCH;
+  const accent = platform === "youtube" ? YOUTUBE : platform === "custom" ? CUSTOM : TWITCH;
   const button = (id: string, label: any, active: boolean, activate: () => void, color?: string) =>
     <TabBtn key={id} active={active} focused={focus === id} color={color} onClick={activate}
       onFocus={() => setFocus(id)} onBlur={() => setFocus(null)}>{label}</TabBtn>;
@@ -1364,6 +1449,7 @@ function Content() {
       <TabRow>
         {button("twitch", <><FaTwitch /> Twitch</>, platform === "twitch", () => pick({ platform: "twitch", tab: "live" }), TWITCH)}
         {button("youtube", <><FaYoutube /> YouTube</>, platform === "youtube", () => pick({ platform: "youtube", tab: "live" }), YOUTUBE)}
+        {button("custom", <><IcBroadcast /> RTMP</>, platform === "custom", () => pick({ platform: "custom", tab: "live" }), CUSTOM)}
         {button("config", <><IcGear /> {t("tab_config")}</>, platform === "config", () => pick({ platform: "config", tab: "settings" }))}
       </TabRow>
       {platform !== "config" && <TabRow>{platformSections(platform).map(section =>

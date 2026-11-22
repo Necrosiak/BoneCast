@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0 — 2026-11-22
+
+### New
+
+- A custom RTMP tab streams to any service that gives a server URL and a stream key, such as TikTok LIVE, Kick or Facebook. It has its own stream settings, and the key is never shown again once saved ([#4](https://github.com/Necrosiak/BoneCast/issues/4)).
+
+### Security
+
+- Stream keys are masked in BoneCast's logs. ffmpeg used to copy the full RTMP address, key included, into its error messages.
+
+### Thanks
+
+Thanks to [@dreemur-e](https://github.com/dreemur-e) for the suggestion ([#4](https://github.com/Necrosiak/BoneCast/issues/4)).
+
+**Full changelog:** [v0.5.10...v0.6.0](https://github.com/Necrosiak/BoneCast/compare/v0.5.10...v0.6.0)
+
 ## 0.5.10 — 2026-11-10
 
 ### Fixes
