@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.0 — 2026-11-22
+
+### New
+
+- Webcam overlay: show your camera in a corner of the stream and of the recording. Pick the corner (top left, top right, bottom left, bottom right) and the size in Config; the setting applies to Twitch, YouTube and custom RTMP alike ([#3](https://github.com/Necrosiak/BoneCast/issues/3)).
+- The webcam is hidden while the BRB screen is on, and comes back when you return, without cutting the stream.
+- Virtual cameras (OBS Virtual Camera, v4l2loopback) are ignored: BoneCast picks the real camera plugged in. If none is found, the stream starts without it.
+- Webcam preview: see your own camera over the game while you stream or record, in the same corner, with adjustable opacity so the game stays visible underneath. Only you see it.
+- Webcam switch on every Live tab: turn the camera off or back on during a live or a recording, instantly and without restarting it.
+
+### Changes
+
+- Clearer settings. Each platform's settings page is split into Video, Sound and Recording, and every drop-down now shows what it sets. The settings shared by all platforms (webcam, recordings folder, resume after a drop, pause screen) moved to Config.
+
+### Fixes
+
+- Reloading or updating BoneCast while a live or a recording was running could crash the game session. The screen capture now detaches cleanly from gamescope first.
+
+### Thanks
+
+Thanks to [@numeraltrace](https://github.com/numeraltrace) for the suggestion ([#3](https://github.com/Necrosiak/BoneCast/issues/3)).
+
+**Full changelog:** [v0.6.0...v0.7.0](https://github.com/Necrosiak/BoneCast/compare/v0.6.0...v0.7.0)
+
 ## 0.6.0 — 2026-11-22
 
 ### New

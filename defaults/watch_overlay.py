@@ -717,6 +717,144 @@ class WatchOverlay:
         self.feeds.clear()
 
 
+# ── Aperçu de la webcam pour le streamer (BoneCast #3) ─────────────────────
+# La caméra n'accepte qu'un lecteur : le ffmpeg du live la garde et écrit une
+# petite copie de chaque image (BGRA, ~15 i/s) dans un fichier, de façon
+# atomique. Cet aperçu ne lit que ce fichier : s'il plante ou rame, le live
+# n'est jamais bloqué. Corner, taille et opacité relus à chaud (state.json).
+# Logé ici plutôt que dans un nouveau fichier : la mise à jour intégrée ne
+# peut pas créer de fichier à la racine d'un plugin installé par Decky (root).
+class CamPreview:
+    def __init__(self, state_dir):
+        self.dir = state_dir
+        self.state = {}
+        self.state_mtime = 0
+        self.frame_mtime = 0
+        self.surf = None
+        self.area = None
+        self.sw = self.sh = 0
+        self.frames = 0
+        self.last_log = 0.0
+
+    def read_state(self):
+        p = os.path.join(self.dir, "state.json")
+        try:
+            m = os.stat(p).st_mtime_ns
+            if m == self.state_mtime:
+                return
+            with open(p) as f:
+                self.state = json.load(f)
+            self.state_mtime = m
+            if self.area:
+                self.area.queue_draw()
+        except (OSError, ValueError):
+            pass
+
+    def read_frame(self):
+        w, h = int(self.state.get("w", 0)), int(self.state.get("h", 0))
+        p = os.path.join(self.dir, "frame.raw")
+        if w <= 0 or h <= 0:
+            return False
+        try:
+            m = os.stat(p).st_mtime_ns
+            if m == self.frame_mtime:
+                return False
+            with open(p, "rb") as f:
+                data = bytearray(f.read())
+        except OSError:
+            return False
+        if len(data) != w * h * 4:
+            return False
+        self.frame_mtime = m
+        self.frames += 1
+        # BGRA little endian = cairo ARGB32 ; the camera has no transparency.
+        self.surf = cairo.ImageSurface.create_for_data(
+            data, cairo.FORMAT_ARGB32, w, h, w * 4)
+        return True
+
+    def rect(self):
+        """Same corner and same share of the screen as on the stream."""
+        s = self.surf
+        if s is None or not self.sw:
+            return None
+        size = float(self.state.get("size", 25)) / 100
+        dw = max(32, int(self.sw * size))
+        dh = int(dw * s.get_height() / max(1, s.get_width()))
+        m = max(4, int(self.sh * 0.025))
+        pos = self.state.get("pos", "br")
+        x = m if pos.endswith("l") else self.sw - dw - m
+        y = m if pos.startswith("t") else self.sh - dh - m
+        return x, y, dw, dh
+
+    def on_draw(self, _w, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        r = self.rect()
+        if r is None or not self.state.get("visible", True):
+            return False
+        x, y, dw, dh = r
+        alpha = max(0.1, min(1.0, float(self.state.get("opacity", 0.8))))
+        cr.save()
+        cr.translate(x, y)
+        cr.scale(dw / self.surf.get_width(), dh / self.surf.get_height())
+        cr.set_source_surface(self.surf, 0, 0)
+        cr.get_source().set_filter(cairo.FILTER_BILINEAR)
+        cr.paint_with_alpha(alpha)
+        cr.restore()
+        return False
+
+    def tick(self):
+        now = time.monotonic()
+        if now - self.last_log >= 10:
+            self.last_log = now
+            print(f"{self.frames} images affichées", flush=True)
+        self.read_state()
+        if self.read_frame() and self.area:
+            r = self.rect()
+            if r:
+                self.area.queue_draw_area(*r)
+        return True
+
+    def run(self):
+        win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        win.set_app_paintable(True)
+        win.set_decorated(False)
+        win.set_accept_focus(False)
+        win.set_focus_on_map(False)
+        win.set_keep_above(True)
+        vis = win.get_screen().get_rgba_visual()
+        if vis:
+            win.set_visual(vis)
+        geo = Gdk.Display.get_default().get_monitor(0).get_geometry()
+        self.sw, self.sh = geo.width, geo.height
+        win.set_default_size(self.sw, self.sh)
+        self.area = Gtk.DrawingArea()
+        self.area.connect("draw", self.on_draw)
+        win.add(self.area)
+
+        def on_realize(_w):
+            gw = win.get_window()
+            set_overlay_atom(gw.get_xid())
+            try:
+                gw.input_shape_combine_region(cairo.Region(), 0, 0)
+            except Exception as e:
+                print(f"input passthrough KO: {e}", flush=True)
+            print(f"overlay {self.sw}x{self.sh} prêt", flush=True)
+        win.connect("realize", on_realize)
+        win.show_all()
+        self.read_state()
+        GLib.timeout_add(33, self.tick)
+
+        def _bye(*_a):
+            Gtk.main_quit()
+            return GLib.SOURCE_REMOVE
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, _bye)
+        Gtk.main()
+
+
 def take_instance_lock(state_dir):
     """Garde une seule fenêtre GTK par état de visionnage.
 
@@ -732,13 +870,30 @@ def take_instance_lock(state_dir):
     return lock
 
 
+def run_cam_preview(state_dir):
+    os.makedirs(state_dir, exist_ok=True)
+    lock = open(os.path.join(state_dir, "preview.lock"), "w")
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("[campv] déjà lancé : seconde instance ignorée", flush=True)
+        return
+    os.environ.setdefault("DISPLAY", ":0")
+    CamPreview(state_dir).run()
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
+    ap.add_argument("--cam-preview", action="store_true",
+                    help="aperçu de la webcam (state.json + frame.raw dans --state-dir)")
     ap.add_argument("--state-dir", default=os.path.expanduser(
         "~/.local/share/bonecast/watch"))
     ap.add_argument("--config", default="",
                     help="json de compte BoneCast (token OAuth → moins de pubs)")
     a = ap.parse_args()
+    if a.cam_preview:
+        run_cam_preview(a.state_dir)
+        raise SystemExit(0)
     os.makedirs(a.state_dir, exist_ok=True)
     instance_lock = take_instance_lock(a.state_dir)
     if instance_lock is None:

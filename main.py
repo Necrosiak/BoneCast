@@ -3,7 +3,7 @@ Incrément 1 : login, titre, catégorie, overlay. Le streaming RTMP arrive à l'
 Config PAR COMPTE Steam : ~/.config/bonecast-<accountid>.json (tokens = secrets, chmod 600)."""
 import os
 import sys
-from json import load, dump
+from json import load, dump, dumps as json_dumps
 from pathlib import Path
 from asyncio import Lock, create_task, current_task as _current_task
 from time import time
@@ -192,6 +192,11 @@ class Plugin:
                         "audio_bitrate": 160, "keyframe": 2,
                         "encoder": "auto", "mic": False, "discord_audio": False,
                         "record": False, "effort": "balanced"}
+    # Webcam : réglage de l'appareil, commun à Twitch, YouTube et RTMP.
+    _WEBCAM_DEFAULTS = {"on": False, "pos": "br", "size": 25,
+                        "preview": True, "opacity": 0.8}
+    _WEBCAM_POS = ("tl", "tr", "bl", "br")
+    _WEBCAM_SIZES = (15, 20, 25, 33)
     # Effort de l'encodeur LOGICIEL (x264) : moins d'effort = moins de CPU (le jeu
     # garde ses images sur un Deck), plus d'effort = image plus nette au même débit.
     # Idée de dreemur-e (BoneCast #1).
@@ -208,6 +213,9 @@ class Plugin:
     _brb_on = False                            # écran pause affiché par le feeder (SIGUSR1/2)
     _brb_restore_mic = False                   # micro auto-muté par le BRB → à rétablir
     _record_path = None                        # fichier mkv du live/enregistrement courant
+    _cam_zmq_port = None                       # commande ffmpeg (zmq) de la webcam incrustée
+    _cam_preview_proc = None                   # aperçu de la webcam à l'écran (cam_preview.py)
+    _cam_preview_size = None                   # taille des images d'aperçu écrites par ffmpeg
     _record_only = False                       # session sans RTMP (enregistrement seul)
     # ── Pont audio Discord (activable si Steamcord présent) ───────────────────
     _DISCORD_SINK = "bonecast_discord"         # sink dédié à la voix Discord
@@ -295,6 +303,7 @@ class Plugin:
             and cls._stream_proc.returncode is None,
             "stream": {**cls._STREAM_DEFAULTS, **(cfg.get("stream") or {})},
             "steamcord": cls._steamcord_present(),
+            "webcam": cls._webcam_cfg(cfg),
             "platform": cls._stream_platform if (cls._stream_proc is not None
                                                  and cls._stream_proc.returncode is None) else None,
             "youtube": {
@@ -1716,6 +1725,311 @@ class Plugin:
         create_task(stream_watcher(cls._camera_feeder.stderr, True, prefix="[gstcam]"))
         return True
 
+    # ── Webcam incrustée dans un coin (BoneCast #3) ─────────────────────────
+    @staticmethod
+    def _find_webcam():
+        """Première vraie caméra V4L2 : nœud d'image (index 0, pas celui des
+        métadonnées) d'un périphérique matériel. Les caméras virtuelles
+        (v4l2loopback, caméra virtuelle d'OBS) sont écartées. Renvoie
+        {"dev", "name"} ou None."""
+        base = Path("/sys/class/video4linux")
+        try:
+            nodes = sorted(base.glob("video*"), key=lambda q: int(q.name[5:] or 0))
+        except (OSError, ValueError):
+            return None
+        for n in nodes:
+            try:
+                if (n / "index").read_text().strip() != "0":
+                    continue
+                name = (n / "name").read_text().strip()
+                drv = os.path.realpath(n / "device" / "driver")
+            except OSError:
+                continue
+            if "loopback" in name.lower() or "loopback" in drv or "virtual" in name.lower():
+                continue
+            dev = f"/dev/{n.name}"
+            if os.path.exists(dev) and os.access(dev, os.R_OK | os.W_OK):
+                return {"dev": dev, "name": name}
+        return None
+
+    @staticmethod
+    def _webcam_mode(listing, want_w):
+        """Choisit format et taille dans la liste de ffmpeg (-list_formats all) :
+        MJPEG de préférence (léger sur l'USB), la plus petite taille au moins
+        aussi large que l'incrustation, sinon la plus grande. Le 16:9 passe
+        avant le 4:3 quand la caméra sait faire les deux."""
+        modes = {}
+        for line in listing.splitlines():
+            if ":" not in line or ("Compressed" not in line and "Raw" not in line):
+                continue
+            parts = [x.strip() for x in line.split(":")]
+            fmt = parts[1] if len(parts) > 1 else ""
+            sizes = []
+            for tok in parts[-1].split():
+                try:
+                    a, b = tok.split("x")
+                    sizes.append((int(a), int(b)))
+                except ValueError:
+                    pass
+            if fmt and sizes:
+                modes[fmt] = sizes
+        for fmt in ("mjpeg", "yuyv422"):
+            sizes = sorted(modes.get(fmt) or [])
+            if not sizes:
+                continue
+            # 16:9 d'abord (comme l'image du jeu), sinon ce que la caméra propose.
+            wide = [z for z in sizes if abs(z[0] / z[1] - 16 / 9) < 0.05]
+            sizes = wide or sizes
+            big = [z for z in sizes if z[0] >= want_w]
+            return fmt, (big[0] if big else sizes[-1])
+        return None
+
+    @classmethod
+    async def _webcam_input(cls, dev, want_w):
+        from asyncio import create_subprocess_exec, wait_for
+        from subprocess import PIPE, DEVNULL
+        try:
+            p = await create_subprocess_exec(
+                "ffmpeg", "-hide_banner", "-f", "v4l2", "-list_formats", "all", "-i", dev,
+                stdin=DEVNULL, stdout=DEVNULL, stderr=PIPE, env=bcenv.user_env())
+            _, err = await wait_for(p.communicate(), timeout=10)
+        except Exception as e:
+            logger.warning(f"[webcam] formats illisibles ({e!r})")
+            return None
+        mode = cls._webcam_mode(err.decode(errors="replace"), want_w)
+        if not mode:
+            return None
+        fmt, (cw, ch) = mode
+        return ["-thread_queue_size", "512", "-use_wallclock_as_timestamps", "1",
+                "-f", "v4l2", "-input_format", fmt, "-video_size", f"{cw}x{ch}",
+                "-i", dev]
+
+    @classmethod
+    def _webcam_overlay(cls, idx, cap_w, cap_h, pos, size, zmq_port=None, preview=None):
+        """Graphe d'incrustation : la webcam réduite à `size` % de la largeur de
+        l'image, posée dans le coin choisi avec une petite marge. Avec
+        `zmq_port`, ffmpeg écoute en local pour masquer la webcam pendant
+        l'écran pause sans couper le live."""
+        pos = pos if pos in cls._WEBCAM_POS else "br"
+        size = size if size in cls._WEBCAM_SIZES else 25
+        cw = max(2, int(cap_w * size / 100) & ~1)
+        m = max(4, int(cap_h * 0.025) & ~1)
+        x = f"{m}" if pos[1] == "l" else f"W-w-{m}"
+        y = f"{m}" if pos[0] == "t" else f"H-h-{m}"
+        # deux niveaux d'échappement (graphe puis option) : « \\: » côté ffmpeg
+        zmq = f",zmq=bind_address=tcp\\\\://127.0.0.1\\\\:{int(zmq_port)}" if zmq_port else ""
+        # Aperçu pour le streamer : une copie réduite à 15 i/s, en BGRA, sortie [pv].
+        pv = (f",split=2[cam][cpv];[cpv]fps=15,scale={preview[0]}:{preview[1]},format=bgra[pv];"
+              if preview else "[cam];")
+        return (f"[{idx}:v]scale={cw}:-2,format=yuv422p{zmq}{pv}"
+                f"[0:v]format=yuv422p[scr];"
+                f"[scr][cam]overlay@bccam=x={x}:y={y}:eof_action=pass:format=yuv422")
+
+    @staticmethod
+    def _free_port():
+        import socket as _so
+        with _so.socket() as sk:
+            sk.bind(("127.0.0.1", 0))
+            return sk.getsockname()[1]
+
+    @staticmethod
+    async def _zmq_request(port, text, timeout=2.0):
+        """Client ZMTP 3.0 minimal (socket REQ, mécanisme NULL) pour le filtre
+        zmq de ffmpeg : évite d'ajouter pyzmq au plugin."""
+        import asyncio as _aio
+        import struct as _st
+        r, w = await _aio.wait_for(_aio.open_connection("127.0.0.1", port), timeout)
+        try:
+            w.write(b"\xff" + b"\x00" * 8 + b"\x7f\x03\x00" + b"NULL".ljust(20, b"\x00")
+                    + b"\x00" * 32)
+            await w.drain()
+            await _aio.wait_for(r.readexactly(64), timeout)
+            body = b"\x05READY\x0bSocket-Type" + _st.pack(">I", 3) + b"REQ"
+            w.write(bytes([0x04, len(body)]) + body)
+            await w.drain()
+
+            async def frame():
+                flags = (await _aio.wait_for(r.readexactly(1), timeout))[0]
+                n = (_st.unpack(">Q", await r.readexactly(8))[0] if flags & 0x02
+                     else (await r.readexactly(1))[0])
+                return flags, await r.readexactly(n)
+            await frame()                                   # READY du serveur
+            data = text.encode()[:255]
+            w.write(b"\x01\x00" + bytes([0x00, len(data)]) + data)
+            await w.drain()
+            parts = []
+            while True:
+                flags, b = await frame()
+                if flags & 0x04:
+                    continue
+                parts.append(b)
+                if not flags & 0x01:
+                    break
+            return b"".join(parts).decode(errors="replace")
+        finally:
+            w.close()
+
+    @classmethod
+    def _webcam_in_live(cls):
+        """La caméra fait partie du live en cours (on peut la couper/remettre)."""
+        return bool(cls._cam_zmq_port and cls._stream_proc is not None
+                    and cls._stream_proc.returncode is None)
+
+    @classmethod
+    async def _webcam_show(cls, on):
+        """Affiche ou masque la webcam incrustée pendant le live."""
+        port = cls._cam_zmq_port
+        if not port or cls._stream_proc is None or cls._stream_proc.returncode is not None:
+            return False
+        try:
+            rep = await cls._zmq_request(port, f"overlay@bccam enable {1 if on else 0}")
+            ok = rep.startswith("0 ")
+            if not ok:
+                logger.warning(f"[webcam] commande refusée : {rep!r}")
+            return ok
+        except Exception as e:
+            logger.warning(f"[webcam] commande impossible : {e!r}")
+            return False
+
+    @staticmethod
+    def _cam_preview_dir():
+        try:
+            rt = bcenv.user_env().get("XDG_RUNTIME_DIR") or ""
+        except Exception:
+            rt = ""
+        return str(Path(rt or f"/run/user/{os.getuid()}") / "bonecast-cam")
+
+    @classmethod
+    def _write_cam_preview_state(cls, st):
+        w, h = cls._cam_preview_size or (0, 0)
+        d = Path(cls._cam_preview_dir())
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            tmp = d / "state.json.tmp"
+            tmp.write_text(json_dumps({
+                "w": w, "h": h, "pos": st.get("pos", "br"),
+                "size": st.get("size", 25),
+                "opacity": cls._clamp_opacity(st.get("opacity"))}))
+            tmp.replace(d / "state.json")
+        except OSError as e:
+            logger.warning(f"[campv] état illisible : {e!r}")
+
+    @staticmethod
+    def _clamp_opacity(v):
+        try:
+            return max(0.1, min(1.0, float(v)))
+        except (TypeError, ValueError):
+            return 0.8
+
+    @classmethod
+    async def _start_cam_preview(cls, st):
+        """Fenêtre d'aperçu par-dessus le jeu ; elle ne lit que le fichier
+        d'images écrit par ffmpeg, jamais la caméra elle-même."""
+        from asyncio import create_subprocess_exec
+        from subprocess import PIPE, DEVNULL
+        p = cls._cam_preview_proc
+        if p is not None and p.returncode is None:
+            return
+        script = Path(DECKY_PLUGIN_DIR) / "watch_overlay.py"
+        if not script.exists():
+            script = Path(DECKY_PLUGIN_DIR) / "defaults" / "watch_overlay.py"
+        if not script.exists():
+            return
+        cls._write_cam_preview_state(st)
+        try:
+            env = dict(bcenv.user_env())
+            env.update(bcenv.steam_display_env())
+            env.setdefault("DISPLAY", ":0")
+            cls._cam_preview_proc = await create_subprocess_exec(
+                sys_python(), str(script), "--cam-preview", "--state-dir", cls._cam_preview_dir(),
+                env=env, stdin=DEVNULL, stdout=PIPE, stderr=PIPE)
+            create_task(stream_watcher(cls._cam_preview_proc.stdout, prefix="[campv]"))
+            create_task(stream_watcher(cls._cam_preview_proc.stderr, True, prefix="[campv]"))
+        except Exception as e:
+            logger.warning(f"[campv] lancement impossible : {e!r}")
+            cls._cam_preview_proc = None
+
+    @classmethod
+    def _clear_cam_frame(cls):
+        for name in ("frame.raw", "frame.raw.tmp"):
+            try:
+                (Path(cls._cam_preview_dir()) / name).unlink()
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger.warning(f"[webcam] aperçu non effacé : {e!r}")
+
+    @classmethod
+    async def _stop_cam_preview(cls):
+        from asyncio import wait_for
+        p = cls._cam_preview_proc
+        cls._cam_preview_proc = None
+        if p is not None and p.returncode is None:
+            try:
+                p.terminate()
+                await wait_for(p.wait(), timeout=3)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+
+    @classmethod
+    async def _apply_cam_preview(cls, st):
+        """Réglages changés pendant le live : opacité appliquée à chaud,
+        aperçu affiché ou retiré sans toucher au stream."""
+        if not cls._cam_preview_size or cls._stream_proc is None \
+                or cls._stream_proc.returncode is not None:
+            return
+        if st.get("preview") and st.get("on", True):
+            cls._write_cam_preview_state(st)
+            await cls._start_cam_preview(st)
+        else:
+            await cls._stop_cam_preview()
+
+    @classmethod
+    def _webcam_cfg(cls, cfg=None):
+        cfg = cls._load_cfg() if cfg is None else cfg
+        w = {**cls._WEBCAM_DEFAULTS, **(cfg.get("webcam") or {})}
+        if w["pos"] not in cls._WEBCAM_POS:
+            w["pos"] = "br"
+        if w["size"] not in cls._WEBCAM_SIZES:
+            w["size"] = 25
+        w["opacity"] = cls._clamp_opacity(w["opacity"])
+        w["on"], w["preview"] = bool(w["on"]), bool(w["preview"])
+        return w
+
+    @classmethod
+    async def get_webcam(cls):
+        cam = cls._find_webcam()
+        streaming = cls._stream_proc is not None and cls._stream_proc.returncode is None
+        return {"found": bool(cam), "name": (cam or {}).get("name", ""),
+                "settings": cls._webcam_cfg(), "streaming": streaming,
+                "live": cls._webcam_in_live()}
+
+    @classmethod
+    async def set_webcam_settings(cls, settings=None):
+        """Coin, taille et aperçu de la webcam. Pendant un live, l'opacité,
+        l'aperçu et la coupure de la caméra changent à chaud ; coin et taille
+        valent pour le prochain live (ils font partie de l'image envoyée).
+        Une caméra absente du live en cours ne peut pas y être ajoutée :
+        elle le sera au prochain."""
+        cfg = cls._load_cfg()
+        w = cls._webcam_cfg(cfg)
+        was_on = w["on"]
+        if isinstance(settings, dict):
+            for k in cls._WEBCAM_DEFAULTS:
+                if settings.get(k) is not None:
+                    w[k] = settings[k]
+        cfg["webcam"] = w
+        cls._save_cfg(cfg)
+        w = cls._webcam_cfg(cfg)
+        live = False
+        if cls._cam_zmq_port and w["on"] != was_on and not cls._brb_on:
+            live = await cls._webcam_show(w["on"])
+        await cls._apply_cam_preview(w)
+        return {"ok": True, "settings": w, "live": live or cls._webcam_in_live()}
+
     @staticmethod
     def _feeder_script():
         script = Path(DECKY_PLUGIN_DIR) / "gst_camera.py"
@@ -1932,11 +2246,49 @@ class Plugin:
         if discord_on and disc_mon:
             args += ["-thread_queue_size", "512", "-f", "pulse", "-i", disc_mon]
             audio_idx.append(nxt); nxt += 1
+        cam_graph = None
+        cam_out = []
+        cls._cam_zmq_port = None
+        cls._cam_preview_size = None
+        wc = cls._webcam_cfg(cfg)
+        if wc["on"]:
+            cam = cls._find_webcam()
+            size = wc["size"]
+            cin = await cls._webcam_input(cam["dev"], cap_w * size // 100) if cam else None
+            if cin:
+                args += cin
+                cls._cam_zmq_port = cls._free_port()
+                # Aperçu : toujours produit quand la webcam est active (petit,
+                # en mémoire) pour pouvoir l'afficher ou le retirer en direct.
+                mw, mh = (int(v) for v in cin[cin.index("-video_size") + 1].split("x"))
+                pw = 480
+                ph = max(2, int(round(pw * mh / max(1, mw) / 2)) * 2)
+                cls._cam_preview_size = (pw, ph)
+                pdir = Path(cls._cam_preview_dir())
+                pdir.mkdir(parents=True, exist_ok=True)
+                # L'image laissée par le live précédent DOIT partir : sans -y,
+                # ffmpeg refuse d'écraser un fichier existant et arrête tout
+                # (« already exists. Exiting. ») — le live/l'enregistrement
+                # s'arrêtait au bout d'une seconde (mesuré le 22/11).
+                cls._clear_cam_frame()
+                cam_out = ["-map", "[pv]", "-c:v", "rawvideo", "-pix_fmt", "bgra",
+                           "-f", "image2", "-update", "1", "-atomic_writing", "1",
+                           str(pdir / "frame.raw")]
+                cam_graph = cls._webcam_overlay(nxt, cap_w, cap_h,
+                                                wc["pos"], size, cls._cam_zmq_port,
+                                                (pw, ph))
+                logger.info(f"[webcam] {cam['name']} ({cam['dev']}) {' '.join(cin[-6:-2])} "
+                            f"coin={wc['pos']} {size}%")
+                nxt += 1
+            else:
+                # Pas de caméra : le live part quand même, sans incrustation.
+                logger.warning("[webcam] aucune caméra utilisable : live sans webcam")
         # Vidéo : encodeur matériel (NVENC/VAAPI) si dispo/choisi, sinon logiciel x264.
+        VF = "\0vf"                            # emplacement du graphe, remplacé plus bas
         if enc == "nvenc":
             # NVENC prend le yuv420p en mémoire système (upload interne, pas de hwupload).
             vf = ([f"scale={w}:{h}"] if w else []) + [f"fps={fps}"]
-            args += ["-vf", ",".join(vf),
+            args += [VF,
                      "-c:v", "h264_nvenc", "-preset", "p5", "-tune", "ll",
                      "-rc", "cbr", "-pix_fmt", "yuv420p",
                      "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k",
@@ -1945,12 +2297,12 @@ class Plugin:
             vf = [f"fps={fps}", "format=nv12", "hwupload"]
             if w:
                 vf.append(f"scale_vaapi=w={w}:h={h}")
-            args += ["-vaapi_device", "/dev/dri/renderD128", "-vf", ",".join(vf),
+            args += ["-vaapi_device", "/dev/dri/renderD128", VF,
                      "-c:v", "h264_vaapi", "-rc_mode", "CBR",
                      "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-g", str(gop)]
         else:
             vf = ([f"scale={w}:{h}"] if w else []) + [f"fps={fps}"]
-            args += ["-vf", ",".join(vf),
+            args += [VF,
                      "-c:v", "libx264",
                      "-preset", cls._X264_PRESETS.get(st.get("effort"), "veryfast"),
                      "-tune", "zerolatency",
@@ -1960,15 +2312,19 @@ class Plugin:
         # Audio : son du jeu seul, ou mixé (micro et/ou Discord) via amix.
         # aresample=async=1 recale l'audio sur une horloge continue (comble/coupe
         # les trous des monitors PulseAudio) → PTS monotones = Twitch ne coupe plus.
+        # Un seul graphe : vidéo (chaîne de l'encodeur, précédée de
+        # l'incrustation webcam si elle est active) + audio.
+        vi = args.index(VF)
         if len(audio_idx) == 1:
-            args += ["-map", "0:v", "-map", "1:a",
-                     "-af", "aresample=async=1:first_pts=0"]
+            agraph = "[1:a]aresample=async=1:first_pts=0[aout]"
         else:
             mix = "".join(f"[{i}:a]" for i in audio_idx)
-            args += ["-filter_complex",
-                     f"{mix}amix=inputs={len(audio_idx)}:duration=longest:dropout_transition=0[mx];"
-                     f"[mx]aresample=async=1:first_pts=0[aout]",
-                     "-map", "0:v", "-map", "[aout]"]
+            agraph = (f"{mix}amix=inputs={len(audio_idx)}:duration=longest:dropout_transition=0[mx];"
+                      f"[mx]aresample=async=1:first_pts=0[aout]")
+        vgraph = (f"{cam_graph},{','.join(vf)}[vout]" if cam_graph
+                  else f"[0:v]{','.join(vf)}[vout]")
+        args[vi:vi + 1] = ["-filter_complex", f"{vgraph};{agraph}"]
+        args += ["-map", "[vout]", "-map", "[aout]"]
         args += ["-c:a", "aac", "-b:a", f"{ab}k", "-ar", "44100",
                  "-max_muxing_queue_size", "1024"]
         # Sorties : RTMP seul, mkv seul (enregistrement), ou les deux via tee.
@@ -1987,6 +2343,7 @@ class Plugin:
                      f"|[f=matroska]{cls._record_path}"]
         else:
             args += ["-f", "flv", cls._rtmp_target(ingest, key)]
+        args += cam_out                        # 2e sortie : images d'aperçu de la webcam
         logger.info(f"[stream] encodeur={enc} {w or 'source'}x{h or ''}@{fps} "
                     f"{vb}kbps mic={bool(mic_src)} discord={bool(discord_on and disc_mon)} "
                     f"record={cls._record_path or '-'} record_only={record_only}")
@@ -2012,6 +2369,8 @@ class Plugin:
                 create_task(cls._discover_mic_so(mic_src, cls._stream_proc.pid))
             cls._stream_platform = want
             cls._stream_started = time()
+            if cls._cam_preview_size and wc["preview"]:
+                await cls._start_cam_preview(wc)
             logger.info(f"[stream] démarré : {want}")
             return {"ok": True}
         except Exception as e:
@@ -2339,6 +2698,8 @@ class Plugin:
         cls._brb_restore_mic = cls._mic_active and not cls._mic_muted
         if cls._brb_restore_mic:
             await cls.set_mic_mute(True)
+        # webcam masquée pendant la pause : on n'est plus devant l'écran
+        await cls._webcam_show(False)
         logger.info("[brb] pause à l'antenne")
         return {"ok": True}
 
@@ -2356,6 +2717,8 @@ class Plugin:
         if cls._brb_restore_mic:
             cls._brb_restore_mic = False
             await cls.set_mic_mute(False)
+        if was and cls._webcam_cfg().get("on"):
+            await cls._webcam_show(True)
         if was:
             logger.info("[brb] retour à l'antenne")
         return {"ok": True}
@@ -2387,6 +2750,9 @@ class Plugin:
         proc = cls._stream_proc
         cls._stream_proc = None
         cls._stream_platform = None
+        await cls._stop_cam_preview()
+        cls._cam_preview_size = None
+        cls._clear_cam_frame()
         # La capture s'arrête AVANT ffmpeg : sinon ffmpeg ferme le tuyau, et le
         # feeder se retrouve à quitter au milieu d'une image (gamescope SIGSEGV,
         # voir _stop_camera_feeder). ffmpeg lit alors la fin du tuyau et termine
@@ -2556,16 +2922,47 @@ class Plugin:
         except Exception as e:
             logger.warning(f"[youtube] live resté ouvert: {e!r}")
 
+    @staticmethod
+    def _wait_pid_sync(pid, timeout):
+        """Attente SYNCHRONE de la fin d'un processus (voir l'ordre de _unload :
+        aucune suspension asyncio possible pendant un déchargement)."""
+        import time as _t
+        end = _t.monotonic() + timeout
+        while _t.monotonic() < end:
+            try:
+                with open(f"/proc/{pid}/stat") as f:
+                    if f.read().split(") ", 1)[1].startswith("Z"):
+                        return True              # terminé, pas encore ramassé
+            except (OSError, IndexError):
+                return True
+            _t.sleep(0.05)
+        return False
+
     @classmethod
     async def _unload(cls):
+        # Capture d'abord, et PROPREMENT : SIGTERM laisse le feeder se
+        # détacher de gamescope. Le tuer en pleine image (ancien ordre : ffmpeg
+        # puis feeder en SIGKILL) fait planter gamescope et relance la session
+        # de jeu — constaté le 22/11 sur un rechargement du plugin pendant un
+        # enregistrement (SIGSEGV dans destroy_buffer de gamescope).
         try:
-            if cls._stream_proc and cls._stream_proc.returncode is None:
-                cls._stream_proc.kill()
+            fd = cls._camera_feeder
+            if fd and fd.returncode is None:
+                fd.terminate()
+                if not cls._wait_pid_sync(fd.pid, 3):
+                    fd.kill()
         except Exception:
             pass
         try:
-            if cls._camera_feeder and cls._camera_feeder.returncode is None:
-                cls._camera_feeder.kill()
+            if cls._stream_proc and cls._stream_proc.returncode is None:
+                cls._stream_proc.terminate()     # ffmpeg referme le fichier mkv
+                if not cls._wait_pid_sync(cls._stream_proc.pid, 1.5):
+                    cls._stream_proc.kill()
+        except Exception:
+            pass
+        try:
+            if cls._cam_preview_proc and cls._cam_preview_proc.returncode is None:
+                cls._cam_preview_proc.terminate()
         except Exception:
             pass
         try:

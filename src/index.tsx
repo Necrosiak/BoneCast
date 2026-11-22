@@ -6,7 +6,7 @@ import {
   TextField,
   ToggleField,
   SliderField,
-  Dropdown,
+  DropdownItem,
   DialogButton,
   Focusable,
   Router,
@@ -580,7 +580,7 @@ function YouTubeSection() {
           <TitleEditor placeholder={yt.title || t("title_placeholder")} color={YOUTUBE}
             onSave={(value) => save({ title: value })} />
           <PanelSectionRow>
-            <Dropdown strDefaultLabel={t("yt_privacy")} selectedOption={yt.privacy || "public"}
+            <DropdownItem label={t("yt_privacy")} selectedOption={yt.privacy || "public"}
               rgOptions={[
                 { data: "public", label: t("yt_public") },
                 { data: "unlisted", label: t("yt_unlisted") },
@@ -589,7 +589,7 @@ function YouTubeSection() {
           </PanelSectionRow>
           {/* Latence du live (#1) : prise en compte au prochain lancement. */}
           <PanelSectionRow>
-            <Dropdown strDefaultLabel={t("yt_latency")} selectedOption={yt.latency || "normal"}
+            <DropdownItem label={t("yt_latency")} selectedOption={yt.latency || "normal"}
               rgOptions={[
                 { data: "normal", label: t("yt_latency_normal") },
                 { data: "low", label: t("yt_latency_low") },
@@ -782,11 +782,10 @@ function ChatSection({ platform }: { platform: "twitch" | "youtube" }) {
                 onChange={(v: number) => pushOv({ height: v })} bottomSeparator="none" />
             </PanelSectionRow>
             <PanelSectionRow>
-              <Dropdown rgOptions={[
+              <DropdownItem label={t("position")} rgOptions={[
                 { data: "tl", label: t("pos_tl") }, { data: "tr", label: t("pos_tr") },
                 { data: "bl", label: t("pos_bl") }, { data: "br", label: t("pos_br") },
-              ]} selectedOption={ov.pos} onChange={(e: any) => pushOv({ pos: e.data })}
-                strDefaultLabel={t("position")} />
+              ]} selectedOption={ov.pos} onChange={(e: any) => pushOv({ pos: e.data })} />
             </PanelSectionRow>
             {!yt && <PanelSectionRow>
               <ToggleField label={t("show_badges")} checked={!!ov.badges}
@@ -816,14 +815,10 @@ function RecordLocation() {
   return (
     <>
       <PanelSectionRow>
-        <Dropdown strDefaultLabel={t("record_location")} selectedOption={loc.selected}
+        <DropdownItem label={t("record_location")} selectedOption={loc.selected}
+          description={loc.missing ? t("record_missing", { d: loc.missing }) : t("record_location_desc")}
           rgOptions={loc.options.map((o: any) => ({ data: o.id, label: label(o) }))}
           onChange={(e: any) => call<[string], any>("set_record_drive", e.data).then(load).catch(() => {})} />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <div style={{ fontSize: 11, opacity: 0.75, color: "#fff", lineHeight: 1.5 }}>
-          {loc.missing ? t("record_missing", { d: loc.missing }) : t("record_location_desc")}
-        </div>
       </PanelSectionRow>
     </>
   );
@@ -839,16 +834,14 @@ function ResumeWindow() {
   if (sec === null) return null;
   return (
     <PanelSectionRow>
-      <Dropdown strDefaultLabel={t("resume_window")} selectedOption={sec}
+      <DropdownItem label={t("resume_window")} selectedOption={sec}
+        description={t("resume_desc")}
         rgOptions={[
           { data: 0, label: t("resume_off") },
           ...[15, 30, 60, 120].map((v) => ({ data: v, label: v < 60 ? `${v} s` : `${v / 60} min` })),
         ]}
         onChange={(e: any) => call<[number], any>("set_resume_window", e.data)
           .then((r: any) => r?.ok && setSec(r.seconds)).catch(() => {})} />
-      <div style={{ fontSize: 10, opacity: 0.6, color: "#fff", marginTop: 4 }}>
-        {t("resume_desc")}
-      </div>
     </PanelSectionRow>
   );
 }
@@ -875,88 +868,187 @@ function StreamSettings({ platform }: { platform: StreamPlatform }) {
     setSt((prev: any) => { const next = { ...prev, ...patch };
       call("set_stream_settings", next, platform).catch(() => {}); return next; });
 
+  const software = st.encoder === "software" || (st.encoder === "auto"
+    && !encoders.includes("nvenc") && !encoders.includes("vaapi"));
+
+  // Propre à CETTE plateforme : vidéo, son, enregistrement. Ce qui est commun
+  // (webcam, dossier des vidéos, reprise, écran pause) est dans Config.
   return (
-    <PanelSection title={t("quality_title")}>
-      <PanelSectionRow>
-        <Dropdown strDefaultLabel={t("resolution")} selectedOption={st.resolution}
-          rgOptions={[
-            { data: "720p", label: "720p (1280×720)" },
-            { data: "800p", label: "800p (1280×800)" },
-            { data: "1080p", label: "1080p (1920×1080)" },
-            { data: "source", label: t("res_source") },
-          ]} onChange={(e: any) => pushSt({ resolution: e.data })} />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <Dropdown strDefaultLabel={t("fps_label")} selectedOption={st.fps}
-          rgOptions={[{ data: 30, label: "30 fps" }, { data: 60, label: "60 fps" }]}
-          onChange={(e: any) => pushSt({ fps: e.data })} />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <SliderField label={t("video_bitrate", { v: st.bitrate })} value={st.bitrate}
-          min={1500} max={8000} step={250} showValue={false}
-          onChange={(v: number) => pushSt({ bitrate: v })} bottomSeparator="none" />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <SliderField label={t("audio_bitrate", { v: st.audio_bitrate })} value={st.audio_bitrate}
-          min={96} max={320} step={16} showValue={false}
-          onChange={(v: number) => pushSt({ audio_bitrate: v })} bottomSeparator="none" />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <SliderField label={t("keyframe_interval", { v: st.keyframe })} value={st.keyframe}
-          min={1} max={5} step={1} showValue={false}
-          onChange={(v: number) => pushSt({ keyframe: v })} bottomSeparator="none" />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <Dropdown strDefaultLabel={t("encoder")} selectedOption={st.encoder}
-          rgOptions={[
-            { data: "auto", label: t("enc_auto") },
-            { data: "software", label: t("enc_software") },
-            ...(encoders.includes("nvenc")
-              ? [{ data: "nvenc", label: t("enc_nvenc") }] : []),
-            ...(encoders.includes("vaapi")
-              ? [{ data: "vaapi", label: t("enc_vaapi") }] : []),
-          ]} onChange={(e: any) => pushSt({ encoder: e.data })} />
-      </PanelSectionRow>
-      {/* Effort x264 : seulement quand l'encodage se fait au processeur. */}
-      {(st.encoder === "software" || (st.encoder === "auto"
-        && !encoders.includes("nvenc") && !encoders.includes("vaapi"))) && (
+    <>
+      <PanelSection title={t("sec_video")}>
         <PanelSectionRow>
-          <Dropdown strDefaultLabel={t("effort")} selectedOption={st.effort || "balanced"}
+          <DropdownItem label={t("resolution")} selectedOption={st.resolution}
             rgOptions={[
-              { data: "light", label: t("effort_light") },
-              { data: "balanced", label: t("effort_balanced") },
-              { data: "quality", label: t("effort_quality") },
-            ]} onChange={(e: any) => pushSt({ effort: e.data })} />
+              { data: "720p", label: "720p (1280×720)" },
+              { data: "800p", label: "800p (1280×800)" },
+              { data: "1080p", label: "1080p (1920×1080)" },
+              { data: "source", label: t("res_source") },
+            ]} onChange={(e: any) => pushSt({ resolution: e.data })} />
         </PanelSectionRow>
-      )}
-      <PanelSectionRow>
-        <div style={{ fontSize: 10, opacity: 0.6, color: "#fff" }}>
-          {encoders.includes("nvenc")
-            ? t("gpu_nvenc")
-            : encoders.includes("vaapi")
-            ? t("gpu_vaapi")
-            : t("gpu_software")}
-        </div>
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ToggleField label={t("mic_add")} checked={!!st.mic}
-          description={t("mic_add_desc")}
-          onChange={(v: boolean) => pushSt({ mic: v })} bottomSeparator="none" />
-      </PanelSectionRow>
-      {steamcord && (
         <PanelSectionRow>
-          <ToggleField label={t("discord_audio")}
-            checked={!!st.discord_audio}
-            description={t("discord_audio_desc")}
-            onChange={(v: boolean) => pushSt({ discord_audio: v })} bottomSeparator="none" />
+          <DropdownItem label={t("fps_label")} selectedOption={st.fps}
+            rgOptions={[{ data: 30, label: "30 fps" }, { data: 60, label: "60 fps" }]}
+            onChange={(e: any) => pushSt({ fps: e.data })} />
         </PanelSectionRow>
-      )}
+        <PanelSectionRow>
+          <SliderField label={t("video_bitrate", { v: st.bitrate })} value={st.bitrate}
+            min={1500} max={8000} step={250} showValue={false}
+            onChange={(v: number) => pushSt({ bitrate: v })} bottomSeparator="none" />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <SliderField label={t("keyframe_interval", { v: st.keyframe })} value={st.keyframe}
+            min={1} max={5} step={1} showValue={false}
+            onChange={(v: number) => pushSt({ keyframe: v })} bottomSeparator="none" />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <DropdownItem label={t("encoder")} selectedOption={st.encoder}
+            description={encoders.includes("nvenc") ? t("gpu_nvenc")
+              : encoders.includes("vaapi") ? t("gpu_vaapi") : t("gpu_software")}
+            rgOptions={[
+              { data: "auto", label: t("enc_auto") },
+              { data: "software", label: t("enc_software") },
+              ...(encoders.includes("nvenc")
+                ? [{ data: "nvenc", label: t("enc_nvenc") }] : []),
+              ...(encoders.includes("vaapi")
+                ? [{ data: "vaapi", label: t("enc_vaapi") }] : []),
+            ]} onChange={(e: any) => pushSt({ encoder: e.data })} />
+        </PanelSectionRow>
+        {/* Effort x264 : seulement quand l'encodage se fait au processeur. */}
+        {software && (
+          <PanelSectionRow>
+            <DropdownItem label={t("effort")} selectedOption={st.effort || "balanced"}
+              rgOptions={[
+                { data: "light", label: t("effort_light") },
+                { data: "balanced", label: t("effort_balanced") },
+                { data: "quality", label: t("effort_quality") },
+              ]} onChange={(e: any) => pushSt({ effort: e.data })} />
+          </PanelSectionRow>
+        )}
+      </PanelSection>
+      <PanelSection title={t("sec_audio")}>
+        <PanelSectionRow>
+          <SliderField label={t("audio_bitrate", { v: st.audio_bitrate })} value={st.audio_bitrate}
+            min={96} max={320} step={16} showValue={false}
+            onChange={(v: number) => pushSt({ audio_bitrate: v })} bottomSeparator="none" />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField label={t("mic_add")} checked={!!st.mic}
+            description={t("mic_add_desc")}
+            onChange={(v: boolean) => pushSt({ mic: v })} bottomSeparator="none" />
+        </PanelSectionRow>
+        {steamcord && (
+          <PanelSectionRow>
+            <ToggleField label={t("discord_audio")}
+              checked={!!st.discord_audio}
+              description={t("discord_audio_desc")}
+              onChange={(v: boolean) => pushSt({ discord_audio: v })} bottomSeparator="none" />
+          </PanelSectionRow>
+        )}
+      </PanelSection>
+      <PanelSection title={t("sec_record")}>
+        <PanelSectionRow>
+          <ToggleField label={t("record_toggle")}
+            checked={!!st.record}
+            description={t("record_desc")}
+            onChange={(v: boolean) => pushSt({ record: v })} bottomSeparator="none" />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <div style={{ fontSize: 11, opacity: 0.6, color: "#fff", lineHeight: 1.5 }}>
+            {t("common_in_config")}
+          </div>
+        </PanelSectionRow>
+      </PanelSection>
+    </>
+  );
+}
+
+// Webcam : un seul réglage pour Twitch, YouTube et RTMP (BoneCast #3).
+function WebcamSection() {
+  const [cam, setCam] = useState<{ found: boolean; name: string } | null>(null);
+  const [w, setW] = useState<any>({ on: false, pos: "br", size: 25, preview: true, opacity: 0.8 });
+  useEffect(() => {
+    call<[], any>("get_webcam").then((c: any) => {
+      setCam(c || null);
+      if (c?.settings) setW(c.settings);
+    }).catch(() => {});
+  }, []);
+  const push = (patch: any) =>
+    setW((prev: any) => { const next = { ...prev, ...patch };
+      call("set_webcam_settings", next).catch(() => {}); return next; });
+  return (
+    <PanelSection title={t("sec_webcam")}>
       <PanelSectionRow>
-        <ToggleField label={t("record_toggle")}
-          checked={!!st.record}
-          description={t("record_desc")}
-          onChange={(v: boolean) => pushSt({ record: v })} bottomSeparator="none" />
+        <ToggleField label={t("webcam_add")} checked={!!w.on}
+          description={cam && !cam.found ? t("webcam_none")
+            : cam?.name ? `${t("webcam_add_desc")} — ${t("webcam_found", { name: cam.name })}`
+            : t("webcam_add_desc")}
+          onChange={(v: boolean) => push({ on: v })} bottomSeparator="none" />
       </PanelSectionRow>
+      {!!w.on && (
+        <>
+          <PanelSectionRow>
+            <DropdownItem label={t("webcam_pos")} selectedOption={w.pos}
+              rgOptions={[
+                { data: "tl", label: t("pos_tl") }, { data: "tr", label: t("pos_tr") },
+                { data: "bl", label: t("pos_bl") }, { data: "br", label: t("pos_br") },
+              ]} onChange={(e: any) => push({ pos: e.data })} />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <DropdownItem label={t("webcam_size")} selectedOption={w.size}
+              rgOptions={[
+                { data: 15, label: t("webcam_s") }, { data: 20, label: t("webcam_m") },
+                { data: 25, label: t("webcam_l") }, { data: 33, label: t("webcam_xl") },
+              ]} onChange={(e: any) => push({ size: e.data })} />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ToggleField label={t("webcam_preview")} checked={!!w.preview}
+              description={t("webcam_preview_desc")}
+              onChange={(v: boolean) => push({ preview: v })} bottomSeparator="none" />
+          </PanelSectionRow>
+          {!!w.preview && (
+            <PanelSectionRow>
+              <SliderField label={t("webcam_opacity", { v: Math.round(w.opacity * 100) })}
+                value={Math.round(w.opacity * 100)} min={10} max={100} step={5}
+                showValue={false} bottomSeparator="none"
+                onChange={(v: number) => push({ opacity: v / 100 })} />
+            </PanelSectionRow>
+          )}
+        </>
+      )}
+    </PanelSection>
+  );
+}
+
+// Interrupteur rapide sur les onglets Live : même réglage global que Config.
+// Pendant un live où la caméra est incrustée, la couper/la remettre est
+// immédiat ; sinon le choix vaut pour le prochain live.
+function WebcamQuick() {
+  const [cam, setCam] = useState<any>(null);
+  const load = () => call<[], any>("get_webcam").then((c: any) => setCam(c || null)).catch(() => {});
+  useEffect(() => { load(); const id = setInterval(load, 5000); return () => clearInterval(id); }, []);
+  if (!cam?.found) return null;
+  const on = !!cam.settings?.on;
+  const desc = cam.streaming && !cam.live && on ? t("webcam_next_live")
+    : `${t("webcam_found", { name: cam.name })} — ${t("webcam_more_in_config")}`;
+  return (
+    <PanelSection title={t("sec_webcam")}>
+      <PanelSectionRow>
+        <ToggleField label={t("webcam_add")} checked={on} description={desc} bottomSeparator="none"
+          onChange={(v: boolean) => {
+            setCam((c: any) => ({ ...c, settings: { ...c.settings, on: v } }));
+            call<[any], any>("set_webcam_settings", { on: v })
+              .then((r: any) => r?.settings && setCam((c: any) => ({ ...c, settings: r.settings, live: !!r.live })))
+              .catch(() => {});
+          }} />
+      </PanelSectionRow>
+    </PanelSection>
+  );
+}
+
+// Réglages communs aux lives : dossier des vidéos, reprise, écran pause.
+function StreamCommonSection() {
+  return (
+    <PanelSection title={t("sec_stream_common")}>
       {/* Où vont les enregistrements : stockage interne, carte SD, disque externe (#1). */}
       <RecordLocation />
       <ResumeWindow />
@@ -1152,6 +1244,8 @@ function MenuEntrySection() {
 function ConfigSection() {
   return (
     <>
+      <WebcamSection />
+      <StreamCommonSection />
       <MenuEntrySection />
       <UpdaterSection />
       <AccountsSection />
@@ -1318,7 +1412,7 @@ function WatchSection() {
       {msg && <PanelSectionRow><div style={{ fontSize: 11, color: "#ffb4b4" }}>{msg}</div></PanelSectionRow>}
       {count > 0 && <>
         <PanelSectionRow>
-          <Dropdown strDefaultLabel={t("watch_layout")} selectedOption={watch.layout}
+          <DropdownItem label={t("watch_layout")} selectedOption={watch.layout}
             rgOptions={(layouts[count] || layouts[1]).map(([data, label]: any) => ({ data, label }))}
             onChange={(e: any) => push({ layout: e.data })} />
         </PanelSectionRow>
@@ -1333,12 +1427,12 @@ function WatchSection() {
             onChange={(v: number) => push({ opacity: v / 100 })} bottomSeparator="none" />
         </PanelSectionRow>
         <PanelSectionRow>
-          <Dropdown strDefaultLabel={t("watch_fps")} selectedOption={watch.max_fps}
+          <DropdownItem label={t("watch_fps")} selectedOption={watch.max_fps}
             rgOptions={[{ data: 30, label: "30 fps" }, { data: 60, label: "60 fps" }]}
             onChange={(e: any) => push({ max_fps: e.data })} />
         </PanelSectionRow>
         <PanelSectionRow>
-          <Dropdown strDefaultLabel={t("watch_audio")} selectedOption={audioOn ? watch.audio : ""}
+          <DropdownItem label={t("watch_audio")} selectedOption={audioOn ? watch.audio : ""}
             rgOptions={[{ data: "", label: t("watch_audio_off") },
               ...watch.streams.map((s: string) => ({ data: s, label: t("watch_audio_of", { v: s }) }))]}
             onChange={(e: any) => push({ audio: e.data })} />
@@ -1397,8 +1491,10 @@ function platformSections(platform: Platform): ExpandedSection[] {
 }
 function SectionContent({ platform, tab }: Selection) {
   if (platform === "config") return <ConfigSection />;
-  if (tab === "live") return platform === "twitch" ? <LiveSection />
-    : platform === "custom" ? <CustomSection /> : <YouTubeSection />;
+  if (tab === "live") return <>
+    {platform === "twitch" ? <LiveSection /> : platform === "custom" ? <CustomSection /> : <YouTubeSection />}
+    <WebcamQuick />
+  </>;
   if (tab === "watch" && platform === "twitch") return <WatchSection />;
   if (tab === "chat" && platform !== "custom") return <ChatSection platform={platform} />;
   return <StreamSettings platform={platform} />;
