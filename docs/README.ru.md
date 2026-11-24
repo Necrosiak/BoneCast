@@ -95,6 +95,8 @@ BoneCast нацелен на **все дистрибутивы Linux**, спос
 
 Создано и поддерживается **Necrosiak**. Часть набора плагинов Necrosiak для игрового режима Steam. Спасибо [dreemur-e](https://github.com/dreemur-e) за тесты на Steam Deck OLED, идеи для YouTube и сторожа захвата, который победил зависшую картинку ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
+Спасибо также [dreemur-e](https://github.com/dreemur-e) за сообщения о микрофоне, названии и подтормаживаниях ([#2](https://github.com/Necrosiak/BoneCast/issues/2), исправлено в v0.5.9) и идею с TikTok, ставшую собственным RTMP ([#4](https://github.com/Necrosiak/BoneCast/issues/4), v0.6.0); [numeraltrace](https://github.com/numeraltrace) за запрос веб-камеры ([#3](https://github.com/Necrosiak/BoneCast/issues/3), v0.7.0); и [objectivecause](https://github.com/objectivecause) за проверку оверлея чата в SteamOS на Legion Go S ([#5](https://github.com/Necrosiak/BoneCast/issues/5), v0.7.1 и v0.7.2).
+
 ## Об использовании ИИ
 
 При работе над проектом использовался ИИ (Claude от Anthropic и Codex от OpenAI) — для обратной разработки, программирования и документации. **Не** для графики и не для художественных текстов. Всё опубликованное просмотрено человеком, и за результат отвечаю я. Если вас это смущает — теперь вы знаете.

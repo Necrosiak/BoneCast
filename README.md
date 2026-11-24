@@ -103,6 +103,8 @@ Feature requests and "it works!" reports on unusual setups are just as valuable.
 
 Created and maintained by **Necrosiak**. Part of the Necrosiak plugin suite for Steam Gaming Mode. Thanks to [dreemur-e](https://github.com/dreemur-e) for testing on the Steam Deck OLED, the YouTube ideas and the capture watchdog that ended the frozen picture ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
+Also thanks to [dreemur-e](https://github.com/dreemur-e) for the microphone, title and stutter reports ([#2](https://github.com/Necrosiak/BoneCast/issues/2), fixed in v0.5.9) and the TikTok idea that became custom RTMP ([#4](https://github.com/Necrosiak/BoneCast/issues/4), v0.6.0); to [numeraltrace](https://github.com/numeraltrace) for the webcam request ([#3](https://github.com/Necrosiak/BoneCast/issues/3), v0.7.0); and to [objectivecause](https://github.com/objectivecause) for testing the chat overlay on SteamOS with a Legion Go S ([#5](https://github.com/Necrosiak/BoneCast/issues/5), v0.7.1 and v0.7.2).
+
 ## AI disclaimer
 
 AI (Claude by Anthropic and Codex by OpenAI) was used in the making of this project — for reverse engineering, development and documentation. It was **not** used for any art or creative writing. Everything released publicly is reviewed by a human, and the results are my responsibility. If that is not something you are comfortable with, now you know.

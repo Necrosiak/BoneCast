@@ -96,6 +96,8 @@ igualmente valiosos.
 
 Criado e mantido por **Necrosiak**. Faz parte da suíte de plugins Necrosiak para o Modo Jogo do Steam. Obrigado a [dreemur-e](https://github.com/dreemur-e) pelos testes no Steam Deck OLED, pelas ideias para o YouTube e pelo vigia da captura que acabou com a imagem congelada ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
+Obrigado também a [dreemur-e](https://github.com/dreemur-e) pelos relatos sobre o microfone, o título e os engasgos ([#2](https://github.com/Necrosiak/BoneCast/issues/2), corrigidos na v0.5.9) e pela ideia do TikTok que virou RTMP personalizado ([#4](https://github.com/Necrosiak/BoneCast/issues/4), v0.6.0); a [numeraltrace](https://github.com/numeraltrace) pelo pedido de webcam ([#3](https://github.com/Necrosiak/BoneCast/issues/3), v0.7.0); e a [objectivecause](https://github.com/objectivecause) por testar a sobreposição do chat no SteamOS com uma Legion Go S ([#5](https://github.com/Necrosiak/BoneCast/issues/5), v0.7.1 e v0.7.2).
+
 ## Aviso sobre IA
 
 Foi usada IA (Claude da Anthropic e Codex da OpenAI) na criação deste projeto: para engenharia reversa, desenvolvimento e documentação. **Não** foi usada para arte nem escrita criativa. Tudo o que é publicado é revisto por um humano, e o resultado é da minha responsabilidade. Se isso o incomoda, fica avisado.

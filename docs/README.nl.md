@@ -96,6 +96,8 @@ zijn net zo waardevol.
 
 Gemaakt en onderhouden door **Necrosiak**. Onderdeel van de Necrosiak-pluginsuite voor de Steam-spelmodus. Dank aan [dreemur-e](https://github.com/dreemur-e) voor het testen op de Steam Deck OLED, de YouTube-ideeën en de capture-watchdog die het bevroren beeld oploste ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
+Ook dank aan [dreemur-e](https://github.com/dreemur-e) voor de meldingen over de microfoon, de titel en haperingen ([#2](https://github.com/Necrosiak/BoneCast/issues/2), opgelost in v0.5.9) en het TikTok-idee dat eigen RTMP werd ([#4](https://github.com/Necrosiak/BoneCast/issues/4), v0.6.0); aan [numeraltrace](https://github.com/numeraltrace) voor het webcamverzoek ([#3](https://github.com/Necrosiak/BoneCast/issues/3), v0.7.0); en aan [objectivecause](https://github.com/objectivecause) voor het testen van de chat-overlay op SteamOS met een Legion Go S ([#5](https://github.com/Necrosiak/BoneCast/issues/5), v0.7.1 en v0.7.2).
+
 ## AI-vermelding
 
 Bij het maken van dit project is AI (Claude van Anthropic en Codex van OpenAI) gebruikt — voor reverse engineering, ontwikkeling en documentatie. **Niet** voor beeld of creatief schrijven. Alles wat wordt gepubliceerd is door een mens nagekeken, en het resultaat blijft mijn verantwoordelijkheid. Als je daar moeite mee hebt, weet je het nu.

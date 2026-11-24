@@ -97,6 +97,8 @@ równie cenne.
 
 Stworzone i utrzymywane przez **Necrosiak**. Część pakietu wtyczek Necrosiak dla Trybu Gry Steam. Podziękowania dla [dreemur-e](https://github.com/dreemur-e) za testy na Steam Deck OLED, pomysły do YouTube i strażnika przechwytywania, który usunął zamrożony obraz ([#1](https://github.com/Necrosiak/BoneCast/issues/1)).
 
+Dziękuję też [dreemur-e](https://github.com/dreemur-e) za zgłoszenia dotyczące mikrofonu, tytułu i przycięć ([#2](https://github.com/Necrosiak/BoneCast/issues/2), poprawione w v0.5.9) oraz pomysł z TikTokiem, z którego powstał własny RTMP ([#4](https://github.com/Necrosiak/BoneCast/issues/4), v0.6.0); [numeraltrace](https://github.com/numeraltrace) za prośbę o kamerę ([#3](https://github.com/Necrosiak/BoneCast/issues/3), v0.7.0); oraz [objectivecause](https://github.com/objectivecause) za testy nakładki czatu na SteamOS na Legion Go S ([#5](https://github.com/Necrosiak/BoneCast/issues/5), v0.7.1 i v0.7.2).
+
 ## Informacja o AI
 
 Przy tworzeniu tego projektu korzystano z AI (Claude od Anthropic i Codex od OpenAI) — do inżynierii wstecznej, programowania i dokumentacji. **Nie** do grafiki ani twórczego pisania. Wszystko, co publikowane, przechodzi przez człowieka, a za wynik odpowiadam ja. Jeśli ci to nie odpowiada, teraz już wiesz.
