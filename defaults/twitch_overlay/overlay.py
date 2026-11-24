@@ -12,12 +12,48 @@ os.environ["GDK_BACKEND"] = "x11"  # window X11 sous XWayland → XID + atome se
 
 import gi
 gi.require_version("Gtk", "3.0")
-gi.require_version("WebKit2", "4.1")
+# WebKitGTK 4.1 (libsoup 3) d'abord, 4.0 (libsoup 2) en repli : même API GTK 3,
+# et certaines distributions n'en livrent qu'une (BoneCast #5).
+for _wk in ("4.1", "4.0"):
+    try:
+        gi.require_version("WebKit2", _wk)
+        break
+    except ValueError:
+        continue
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, WebKit2, Gdk, GLib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHAT_HTML = os.path.join(HERE, "chat.html")
+
+
+def _set_overlay_atom_ctypes(xid):
+    """Même chose via libX11 directement : python-xlib est absent de SteamOS
+    (BoneCast #5). Repris de watch_overlay.py."""
+    from ctypes import cdll, c_char_p, c_int, c_ulong, c_void_p, POINTER
+    x = cdll.LoadLibrary("libX11.so.6")
+    x.XOpenDisplay.argtypes = [c_char_p]; x.XOpenDisplay.restype = c_void_p
+    x.XInternAtom.argtypes = [c_void_p, c_char_p, c_int]; x.XInternAtom.restype = c_ulong
+    x.XChangeProperty.argtypes = [c_void_p, c_ulong, c_ulong, c_ulong, c_int, c_int,
+                                  POINTER(c_ulong), c_int]
+    x.XSync.argtypes = [c_void_p, c_int]
+    x.XCloseDisplay.argtypes = [c_void_p]
+    d = x.XOpenDisplay(None)
+    if not d:
+        raise RuntimeError("XOpenDisplay failed")
+    try:
+        XA_ATOM, XA_CARDINAL, REPLACE = 4, 6, 0
+        one = (c_ulong * 1)(1)
+        x.XChangeProperty(d, xid, x.XInternAtom(d, b"GAMESCOPE_EXTERNAL_OVERLAY", False),
+                          XA_CARDINAL, 32, REPLACE, one, 1)
+        types = (c_ulong * 2)(
+            x.XInternAtom(d, b"_KDE_NET_WM_WINDOW_TYPE_ON_SCREEN_DISPLAY", False),
+            x.XInternAtom(d, b"_NET_WM_WINDOW_TYPE_NOTIFICATION", False))
+        x.XChangeProperty(d, xid, x.XInternAtom(d, b"_NET_WM_WINDOW_TYPE", False),
+                          XA_ATOM, 32, REPLACE, types, 2)
+        x.XSync(d, False)
+    finally:
+        x.XCloseDisplay(d)
 
 
 def set_overlay_atom(xid):
@@ -26,15 +62,7 @@ def set_overlay_atom(xid):
     KWin AU-DESSUS du plein écran ACTIF — sans lui, Big Picture focalisé
     recouvre l'overlay (la couche notification passe dessous)."""
     try:
-        from Xlib import display, Xatom
-        d = display.Display()
-        w = d.create_resource_object("window", xid)
-        w.change_property(d.intern_atom("GAMESCOPE_EXTERNAL_OVERLAY"), Xatom.CARDINAL, 32, [1])
-        w.change_property(
-            d.intern_atom("_NET_WM_WINDOW_TYPE"), Xatom.ATOM, 32,
-            [d.intern_atom("_KDE_NET_WM_WINDOW_TYPE_ON_SCREEN_DISPLAY"),
-             d.intern_atom("_NET_WM_WINDOW_TYPE_NOTIFICATION")])
-        d.sync(); d.close()
+        _set_overlay_atom_ctypes(xid)
         return True
     except Exception as e:
         print("[overlay] atome KO:", e, flush=True)

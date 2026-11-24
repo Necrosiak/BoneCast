@@ -1529,10 +1529,10 @@ class Plugin:
 
     @classmethod
     async def _overlay_python_hint(cls):
-        """None si /usr/bin/python3 a GTK 3, WebKit2GTK 4.1 et python-xlib
+        """None si /usr/bin/python3 a GTK 3, WebKitGTK (4.1 ou 4.0) et libX11
         (requis par l'overlay du chat), sinon le hint d'install pour cet OS.
-        Sans Xlib la fenêtre ne reçoit pas l'atome GAMESCOPE_EXTERNAL_OVERLAY
-        et reste invisible en mode Jeu (BoneCast #5)."""
+        L'atome gamescope passe par libX11 en ctypes : python-xlib, absent de
+        SteamOS, n'est plus nécessaire (BoneCast #5)."""
         if cls._overlay_py_ok:
             return None
         from asyncio import create_subprocess_exec
@@ -1540,14 +1540,19 @@ class Plugin:
         try:
             p = await create_subprocess_exec(
                 "/usr/bin/python3", "-c",
-                "import gi\n"
+                "import gi, ctypes\n"
                 "miss=[]\n"
-                "for n,v in (('Gtk','3.0'),('Gdk','3.0'),('WebKit2','4.1')):\n"
+                "for n,v in (('Gtk','3.0'),('Gdk','3.0')):\n"
                 "  try: gi.require_version(n,v)\n"
                 "  except Exception: miss.append(n+' '+v)\n"
-                "try: import Xlib\n"
-                "except Exception: miss.append('Xlib')\n"
-                "print(','.join(miss))",
+                "wk=False\n"
+                "for v in ('4.1','4.0'):\n"
+                "  try: gi.require_version('WebKit2',v); wk=True; break\n"
+                "  except Exception: pass\n"
+                "if not wk: miss.append('WebKitGTK (WebKit2 4.1 or 4.0)')\n"
+                "try: ctypes.cdll.LoadLibrary('libX11.so.6')\n"
+                "except Exception: miss.append('libX11')\n"
+                "print(', '.join(miss))",
                 stdout=PIPE, stderr=DEVNULL, env=bcenv.user_env())
             out, _ = await p.communicate()
             missing = out.decode().strip() if p.returncode == 0 else "python-gobject"
@@ -1558,9 +1563,9 @@ class Plugin:
             return None
         logger.info(f"[overlay] modules manquants : {missing}")
         return (f"Chat overlay needs {missing}: "
-                + cls._pkg_hint("python-gobject webkit2gtk-4.1 python-xlib",
-                                "python3-gobject webkit2gtk4.1 python3-xlib",
-                                "python3-gi gir1.2-webkit2-4.1 python3-xlib"))
+                + cls._pkg_hint("python-gobject webkit2gtk-4.1",
+                                "python3-gobject webkit2gtk4.1",
+                                "python3-gi gir1.2-webkit2-4.1"))
 
     @classmethod
     async def _gst_python_hint(cls):
