@@ -1127,6 +1127,10 @@ class Plugin:
             extra = ["--channel", channel]
         if not channel:
             return {"ok": False, "error": "no_channel"}
+        hint = await cls._overlay_python_hint()
+        if hint:
+            logger.warning(f"[overlay] {hint}")
+            return {"ok": False, "error": "missing_deps", "hint": hint}
         from asyncio import create_subprocess_exec
         from subprocess import PIPE
         script = Path(DECKY_PLUGIN_DIR) / "twitch_overlay" / "overlay.py"
@@ -1156,6 +1160,20 @@ class Plugin:
             create_task(stream_watcher(cls._overlay_proc.stdout, prefix="[overlay]"))
             create_task(stream_watcher(cls._overlay_proc.stderr, True, prefix="[overlay]"))
             logger.info(f"[overlay] démarré ({platform}: {channel})")
+            # Un overlay qui meurt au démarrage (GTK/WebKit/X) laissait le QAM
+            # afficher « activé » sans rien à l'écran (BoneCast #5) : on attend
+            # un court instant et on remonte l'échec.
+            from asyncio import wait_for as _wf
+            try:
+                await _wf(cls._overlay_proc.wait(), 2.5)
+            except Exception:
+                pass
+            if cls._overlay_proc.returncode is not None:
+                code = cls._overlay_proc.returncode
+                cls._overlay_proc = None
+                cls._overlay_platform = None
+                logger.warning(f"[overlay] arrêté au démarrage (code {code})")
+                return {"ok": False, "error": "overlay_exited"}
             if platform == "twitch":
                 cls._start_follows(d, cls._overlay_proc)
             return {"ok": True}
@@ -1506,6 +1524,43 @@ class Plugin:
         cls._x264_ok = ok
         logger.info(f"[stream] encode logiciel libx264 = {'dispo' if ok else 'ABSENT (ffmpeg-free ?)'}")
         return ok
+
+    _overlay_py_ok = False
+
+    @classmethod
+    async def _overlay_python_hint(cls):
+        """None si /usr/bin/python3 a GTK 3, WebKit2GTK 4.1 et python-xlib
+        (requis par l'overlay du chat), sinon le hint d'install pour cet OS.
+        Sans Xlib la fenêtre ne reçoit pas l'atome GAMESCOPE_EXTERNAL_OVERLAY
+        et reste invisible en mode Jeu (BoneCast #5)."""
+        if cls._overlay_py_ok:
+            return None
+        from asyncio import create_subprocess_exec
+        from subprocess import DEVNULL, PIPE
+        try:
+            p = await create_subprocess_exec(
+                "/usr/bin/python3", "-c",
+                "import gi\n"
+                "miss=[]\n"
+                "for n,v in (('Gtk','3.0'),('Gdk','3.0'),('WebKit2','4.1')):\n"
+                "  try: gi.require_version(n,v)\n"
+                "  except Exception: miss.append(n+' '+v)\n"
+                "try: import Xlib\n"
+                "except Exception: miss.append('Xlib')\n"
+                "print(','.join(miss))",
+                stdout=PIPE, stderr=DEVNULL, env=bcenv.user_env())
+            out, _ = await p.communicate()
+            missing = out.decode().strip() if p.returncode == 0 else "python-gobject"
+        except Exception:
+            missing = "python3"
+        if not missing:
+            cls._overlay_py_ok = True
+            return None
+        logger.info(f"[overlay] modules manquants : {missing}")
+        return (f"Chat overlay needs {missing}: "
+                + cls._pkg_hint("python-gobject webkit2gtk-4.1 python-xlib",
+                                "python3-gobject webkit2gtk4.1 python3-xlib",
+                                "python3-gi gir1.2-webkit2-4.1 python3-xlib"))
 
     @classmethod
     async def _gst_python_hint(cls):

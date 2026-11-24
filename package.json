@@ -1,6 +1,6 @@
 {
   "name": "bonecast",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "type": "module",
   "description": "Twitch and YouTube in Steam Gaming Mode — streaming + transparent chat overlay",
   "scripts": {

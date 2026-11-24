@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1 — 2026-11-24
+
+### Fixes
+
+- The chat overlay no longer fails silently. If it can't start, for example because GTK, WebKitGTK 4.1 or python-xlib is missing on the system, the Quick Access Menu now says so and turns the switch back off instead of showing it on with nothing on screen ([#5](https://github.com/Necrosiak/BoneCast/issues/5)).
+
 ## 0.7.0 — 2026-11-22
 
 ### New

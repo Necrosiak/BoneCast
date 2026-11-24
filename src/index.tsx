@@ -685,6 +685,13 @@ function ChatSection({ platform }: { platform: "twitch" | "youtube" }) {
     try {
       const r: any = v ? await call<[string], any>("start_overlay", platform) : await call("stop_overlay");
       if (r?.error === "busy") setChatMsg(t("overlay_busy", { p: platformName(r?.platform) }));
+      else if (v && r?.ok === false) {
+        // L'overlay n'a pas pu démarrer : le dire au lieu d'afficher « activé »
+        // sans rien à l'écran (BoneCast #5).
+        setOverlayOn(false);
+        setChatMsg(r?.error === "missing_deps" ? (r?.hint || t("overlay_failed"))
+          : r?.error === "no_channel" ? t("overlay_no_channel") : t("overlay_failed"));
+      }
     } catch { /* noop */ }
     refresh();
   };
