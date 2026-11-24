@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.2 — 2026-11-24
+
+### Fixes
+
+- Chat overlay on SteamOS: it no longer needs python-xlib, which SteamOS doesn't ship. The overlay now places itself over the game through the system's X11 library directly, like the watch overlay already did ([#5](https://github.com/Necrosiak/BoneCast/issues/5)).
+- The chat overlay also works with WebKitGTK 4.0 when 4.1 isn't installed.
+
 ## 0.7.1 — 2026-11-24
 
 ### Fixes
